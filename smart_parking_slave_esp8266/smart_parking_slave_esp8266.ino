@@ -5,14 +5,11 @@
 const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
-// Master ESP32 IP and WebSocket port (hardcoded)
 const char* masterIP = "192.168.29.30";
 const int masterPort = 81;
 
-// Device ID (hardcoded for each slave - change this for each device)
-const int DEVICE_ID = 4;  // Unique ID for this slave
+const int DEVICE_ID = 1;  // Unique ID for this slave
 
-// Ultrasonic sensor pins
 const int TRIG_PIN = 5;  // Trigger pin connected to D1
 const int ECHO_PIN = 4;  // Echo pin connected to D2
 
@@ -20,30 +17,25 @@ const int ECHO_PIN = 4;  // Echo pin connected to D2
 const int RED_LED_PIN = 2;    // D4
 const int GREEN_LED_PIN = 0;  // D3
 
-// WebSocket client
 WebSocketsClient webSocket;
 
-// Variables for distance measurement
 long duration;
 int distance;
 unsigned long lastReadingTime = 0;
-const unsigned long READ_INTERVAL = 2000;  // Read every 2 seconds
+const unsigned long READ_INTERVAL = 2000;
 
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP8266 Slave - Smart Parking System");
 
-  // Initialize LED pins
   pinMode(RED_LED_PIN, OUTPUT);
   pinMode(GREEN_LED_PIN, OUTPUT);
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(GREEN_LED_PIN, LOW);
   
-  // Initialize ultrasonic sensor pins
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
-  // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
   
@@ -57,10 +49,15 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   
-  // Set up WebSocket connection to master
+  int connectionDelay = 1000 + (DEVICE_ID * 500);
+  Serial.print("Waiting ");
+  Serial.print(connectionDelay);
+  Serial.println("ms before connecting to WebSocket server...");
+  delay(connectionDelay);
+  
   webSocket.begin(masterIP, masterPort, "/");
   webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(5000);  // Try to reconnect every 5 seconds if connection is lost
+  webSocket.setReconnectInterval(5000);
   
   Serial.println("WebSocket connection initialized");
 }
@@ -69,21 +66,31 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
       Serial.println("Disconnected from WebSocket server");
-      // When disconnected, both LEDs off
       digitalWrite(RED_LED_PIN, LOW);
       digitalWrite(GREEN_LED_PIN, LOW);
+      
+      digitalWrite(RED_LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(RED_LED_PIN, LOW);
       break;
       
     case WStype_CONNECTED:
       Serial.println("Connected to WebSocket server");
-      // Send initial reading when connected
+
+      digitalWrite(GREEN_LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(GREEN_LED_PIN, LOW);
+      delay(100);
+      digitalWrite(GREEN_LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(GREEN_LED_PIN, LOW);
+      
       sendDistanceReading();
       break;
       
     case WStype_TEXT:
       Serial.printf("Received text: %s\n", payload);
       
-      // Parse the incoming JSON
       DynamicJsonDocument doc(128);
       DeserializationError error = deserializeJson(doc, payload);
       
@@ -93,18 +100,15 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         return;
       }
       
-      // Check if message is for this slave
       int receivedId = doc["id"];
       if (receivedId == DEVICE_ID) {
         String ledStatus = doc["led"];
         
         if (ledStatus == "red") {
-          // Occupied status - turn on red LED, turn off green LED
           digitalWrite(RED_LED_PIN, HIGH);
           digitalWrite(GREEN_LED_PIN, LOW);
           Serial.println("Setting RED LED ON (spot occupied)");
         } else if (ledStatus == "green") {
-          // Available status - turn on green LED, turn off red LED
           digitalWrite(RED_LED_PIN, LOW);
           digitalWrite(GREEN_LED_PIN, HIGH);
           Serial.println("Setting GREEN LED ON (spot available)");
@@ -114,24 +118,18 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   }
 }
 
-// Function to read distance from ultrasonic sensor
 int readDistance() {
-  // Clear the trigger pin
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   
-  // Set the trigger pin HIGH for 10 microseconds
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
   
-  // Read the echo pin, returns the sound wave travel time in microseconds
   duration = pulseIn(ECHO_PIN, HIGH);
   
-  // Calculate the distance
-  int calculatedDistance = duration * 0.034 / 2;  // Speed of sound wave divided by 2 (go and back)
+  int calculatedDistance = duration * 0.034 / 2;
   
-  // Cap the distance at max reading
   if (calculatedDistance > 200) {
     calculatedDistance = 200;
   }
@@ -139,17 +137,14 @@ int readDistance() {
   return calculatedDistance;
 }
 
-// Function to send distance reading to master
 void sendDistanceReading() {
   if (webSocket.isConnected()) {
     distance = readDistance();
     
-    // Prepare JSON message
     DynamicJsonDocument doc(128);
     doc["id"] = DEVICE_ID;
     doc["distance"] = distance;
     
-    // Serialize and send
     String jsonString;
     serializeJson(doc, jsonString);
     webSocket.sendTXT(jsonString);
@@ -162,13 +157,35 @@ void sendDistanceReading() {
   }
 }
 
+bool wasConnected = false;
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 3000;
+
 void loop() {
   webSocket.loop();
   
   unsigned long currentTime = millis();
   
-  // Read and send distance at regular intervals
-  if (currentTime - lastReadingTime >= READ_INTERVAL) {
+  bool isConnected = webSocket.isConnected();
+  if (isConnected != wasConnected) {
+    if (isConnected) {
+      Serial.println("Connection established");
+    } else {
+      Serial.println("Connection lost, will retry soon");
+    }
+    wasConnected = isConnected;
+  }
+  
+  if (!isConnected && (currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL)) {
+    Serial.println("Attempting to reconnect...");
+    lastReconnectAttempt = currentTime;
+
+    digitalWrite(GREEN_LED_PIN, HIGH);
+    delay(50);
+    digitalWrite(GREEN_LED_PIN, LOW);
+  }
+  
+  if (isConnected && (currentTime - lastReadingTime >= READ_INTERVAL)) {
     sendDistanceReading();
     lastReadingTime = currentTime;
   }

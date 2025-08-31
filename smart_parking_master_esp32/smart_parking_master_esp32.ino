@@ -12,15 +12,14 @@ IPAddress gateway(192, 168, 29, 1);
 IPAddress subnet(255, 255, 255, 0);
 
 // WebSocket server
-WebSocketsServer webSocket = WebSocketsServer(81);
+WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
 
 // Constants
-const int DISTANCE_THRESHOLD = 45;  // 45cm threshold for occupied status
-const int MAX_DISTANCE = 200;       // Maximum reading distance
-const unsigned long SYNC_INTERVAL = 5000; // 5 seconds sync interval
+const int DISTANCE_THRESHOLD = 45;
+const int MAX_DISTANCE = 200;
+const unsigned long SYNC_INTERVAL = 5000;
 
-// Structure to hold parking spot data
 struct ParkingSpot {
   int id;
   int distance;
@@ -28,15 +27,12 @@ struct ParkingSpot {
   unsigned long lastUpdate;
 };
 
-// Array to store parking spots (adjust size as needed)
 const int MAX_SPOTS = 10;
 ParkingSpot parkingSpots[MAX_SPOTS];
 int connectedSpots = 0;
 
-// Time tracking
 unsigned long lastSyncTime = 0;
 
-// HTML for the web interface
 const char mainPage[] PROGMEM = R"html(
 <!DOCTYPE html>
 <html>
@@ -101,7 +97,6 @@ const char mainPage[] PROGMEM = R"html(
       <p>Occupied Spots: <span id="occupiedSpots">0</span></p>
     </div>
     <div id="statusGrid" class="status-grid">
-      <!-- Parking spots will be added here -->
     </div>
   </div>
 
@@ -121,7 +116,6 @@ const char mainPage[] PROGMEM = R"html(
       
       socket.onclose = function() {
         console.log('WebSocket connection closed');
-        // Try to reconnect after 2 seconds
         setTimeout(connect, 2000);
       };
     }
@@ -133,13 +127,17 @@ const char mainPage[] PROGMEM = R"html(
       let availableCount = 0;
       let occupiedCount = 0;
       
+      console.log("Received parking data:", data);
+      
       data.spots.forEach(spot => {
         const spotElement = document.createElement('div');
         spotElement.className = 'spot ' + (spot.isOccupied ? 'occupied' : 'available');
         
-        const now = new Date().getTime();
-        const lastUpdate = new Date(spot.lastUpdate).getTime();
-        const isOffline = (now - lastUpdate) > 10000;
+        const currentServerTime = data.serverTime || 0;
+        const timeSinceUpdate = currentServerTime - spot.lastUpdate;
+        const isOffline = currentServerTime > 0 && timeSinceUpdate > 10000;
+        
+        console.log(`Spot ${spot.id}: Time since last update: ${timeSinceUpdate}ms, Status: ${isOffline ? 'Offline' : (spot.isOccupied ? 'Occupied' : 'Available')}`);
         
         if (isOffline) {
           spotElement.className = 'spot offline';
@@ -169,10 +167,8 @@ const char mainPage[] PROGMEM = R"html(
 </html>
 )html";
 
-// Task handles for dual core operation
 TaskHandle_t WebUITask;
 
-// Function to find a parking spot by ID
 int findParkingSpotById(int id) {
   for (int i = 0; i < connectedSpots; i++) {
     if (parkingSpots[i].id == id) {
@@ -182,10 +178,11 @@ int findParkingSpotById(int id) {
   return -1;
 }
 
-// Broadcast parking status to all connected clients
 void broadcastParkingStatus() {
   DynamicJsonDocument doc(1024);
   JsonArray spots = doc.createNestedArray("spots");
+  
+  doc["serverTime"] = millis();
   
   for (int i = 0; i < connectedSpots; i++) {
     JsonObject spot = spots.createNestedObject();
@@ -200,17 +197,21 @@ void broadcastParkingStatus() {
   webSocket.broadcastTXT(jsonString);
 }
 
-// WebSocket event handler
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
       Serial.printf("[%u] Disconnected!\n", num);
+      delay(50);
       break;
     
     case WStype_CONNECTED:
       {
         IPAddress ip = webSocket.remoteIP(num);
         Serial.printf("[%u] Connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+        
+        delay(100);
+        
+        broadcastParkingStatus();
       }
       break;
     
@@ -218,7 +219,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       {
         Serial.printf("[%u] Received text: %s\n", num, payload);
         
-        // Parse the incoming JSON
         DynamicJsonDocument doc(256);
         DeserializationError error = deserializeJson(doc, payload);
         
@@ -228,7 +228,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
           return;
         }
         
-        // Process data from ESP8266 slave
         int id = doc["id"];
         int distance = doc["distance"];
         
@@ -242,12 +241,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         }
         
         if (spotIndex != -1) {
-          // Update spot data
+          bool wasOccupied = parkingSpots[spotIndex].isOccupied;
+          
           parkingSpots[spotIndex].distance = distance;
           parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
           parkingSpots[spotIndex].lastUpdate = millis();
           
-          // Send LED status back to the slave
           DynamicJsonDocument response(128);
           response["id"] = id;
           response["led"] = parkingSpots[spotIndex].isOccupied ? "red" : "green";
@@ -258,13 +257,17 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
           
           Serial.printf("Updated spot %d: distance=%d, occupied=%s\n", 
                        id, distance, parkingSpots[spotIndex].isOccupied ? "yes" : "no");
+          
+          if (wasOccupied != parkingSpots[spotIndex].isOccupied) {
+            Serial.println("Spot status changed, broadcasting update to all clients");
+            broadcastParkingStatus();
+          }
         }
       }
       break;
   }
 }
 
-// WebUI task - runs on core 1
 void webUITaskFunction(void * parameter) {
   for(;;) {
     webSocket.loop();
@@ -276,12 +279,10 @@ void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Master - Smart Parking System");
   
-  // Configure static IP
   if (!WiFi.config(local_IP, gateway, subnet)) {
     Serial.println("Failed to configure static IP!");
   }
   
-  // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -292,13 +293,12 @@ void setup() {
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  
-  // Start WebSocket server
+
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
   Serial.println("WebSocket server started");
   
-  // Setup web server
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", mainPage);
   });
@@ -306,7 +306,6 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
   
-  // Initialize parking spots
   for (int i = 0; i < MAX_SPOTS; i++) {
     parkingSpots[i].id = -1;
     parkingSpots[i].distance = 0;
@@ -314,35 +313,29 @@ void setup() {
     parkingSpots[i].lastUpdate = 0;
   }
   
-  // Start WebUI task on core 1
   xTaskCreatePinnedToCore(
-    webUITaskFunction,  // Function to implement the task
-    "WebUITask",        // Name of the task
-    10000,              // Stack size in words
-    NULL,               // Task input parameter
-    1,                  // Priority of the task
-    &WebUITask,         // Task handle
-    1                   // Core where the task should run (1 for WebUI)
+    webUITaskFunction,
+    "WebUITask",
+    10000,
+    NULL,
+    1,
+    &WebUITask,
+    1
   );
   
-  // Initialize sync time
   lastSyncTime = millis();
 }
 
 void loop() {
-  // Main loop runs on core 0
   unsigned long currentTime = millis();
   
-  // Check if it's time to sync
   if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
     Serial.println("Syncing parking status...");
     
-    // Broadcast current status to web clients
     broadcastParkingStatus();
     
     lastSyncTime = currentTime;
   }
   
-  // Give some time to other tasks
   delay(100);
 }
