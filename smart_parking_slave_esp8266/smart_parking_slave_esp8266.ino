@@ -1,12 +1,22 @@
 #include <ESP8266WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
+#include <WiFiUdp.h>
 
 const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
-const char* masterIP = "192.168.29.30";
-const int masterPort = 81;
+String masterIP = "";
+int masterPort = 81;
+bool masterDiscovered = false;
+
+WiFiUDP udp;
+const int UDP_PORT = 4210;
+const char* DISCOVERY_MESSAGE = "SMART_PARKING_MASTER";
+
+// Discovery timeout
+const unsigned long DISCOVERY_TIMEOUT = 60000;
+unsigned long discoveryStartTime = 0;
 
 const int DEVICE_ID = 1;  // Unique ID for this slave
 
@@ -23,6 +33,106 @@ long duration;
 int distance;
 unsigned long lastReadingTime = 0;
 const unsigned long READ_INTERVAL = 2000;
+
+bool listenForDiscovery(unsigned long timeout) {
+  unsigned long startTime = millis();
+  Serial.println("Listening for master discovery broadcast...");
+  
+  digitalWrite(RED_LED_PIN, HIGH);
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  
+  udp.begin(UDP_PORT);
+  
+  while (millis() - startTime < timeout) {
+    int packetSize = udp.parsePacket();
+    if (packetSize) {
+      Serial.printf("Received UDP packet of size %d from %s:%d\n", 
+                   packetSize, udp.remoteIP().toString().c_str(), udp.remotePort());
+      
+      char packetBuffer[256];
+      int len = udp.read(packetBuffer, 255);
+      if (len > 0) {
+        packetBuffer[len] = 0;
+      }
+      
+      Serial.printf("Packet contents: %s\n", packetBuffer);
+      
+      DynamicJsonDocument doc(256);
+      DeserializationError error = deserializeJson(doc, packetBuffer);
+      
+      if (error) {
+        Serial.print("deserializeJson() failed: ");
+        Serial.println(error.c_str());
+        continue;
+      }
+      
+      const char* type = doc["type"];
+      const char* message = doc["message"];
+      
+      if (type && message && strcmp(type, "discovery") == 0 && 
+          strcmp(message, DISCOVERY_MESSAGE) == 0) {
+        
+        const char* ip = doc["ip"];
+        int port = doc["port"];
+        
+        if (ip) {
+          masterIP = String(ip);
+          if (port > 0) {
+            masterPort = port;
+          }
+          
+          Serial.printf("Master discovered at %s:%d\n", masterIP.c_str(), masterPort);
+
+          for (int i = 0; i < 3; i++) {
+            digitalWrite(GREEN_LED_PIN, HIGH);
+            delay(100);
+            digitalWrite(GREEN_LED_PIN, LOW);
+            delay(100);
+          }
+          
+          return true;
+        }
+      }
+    }
+    
+    if (millis() % 500 < 250) {
+      digitalWrite(RED_LED_PIN, HIGH);
+      digitalWrite(GREEN_LED_PIN, LOW);
+    } else {
+      digitalWrite(RED_LED_PIN, LOW);
+      digitalWrite(GREEN_LED_PIN, HIGH);
+    }
+    
+    delay(10);
+  }
+  
+  Serial.println("Discovery timeout!");
+  
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(RED_LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(RED_LED_PIN, LOW);
+    delay(100);
+  }
+  
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  
+  return false;
+}
+
+void connectToWebSocket() {
+  if (masterIP.length() > 0) {
+    Serial.printf("Connecting to WebSocket server at %s:%d\n", masterIP.c_str(), masterPort);
+    webSocket.begin(masterIP.c_str(), masterPort, "/");
+    webSocket.onEvent(webSocketEvent);
+    webSocket.setReconnectInterval(5000);
+    masterDiscovered = true;
+  } else {
+    Serial.println("Cannot connect: Master IP unknown");
+    masterDiscovered = false;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -49,17 +159,14 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   
-  int connectionDelay = 1000 + (DEVICE_ID * 500);
-  Serial.print("Waiting ");
-  Serial.print(connectionDelay);
-  Serial.println("ms before connecting to WebSocket server...");
-  delay(connectionDelay);
+  discoveryStartTime = millis();
+  if (listenForDiscovery(DISCOVERY_TIMEOUT)) {
+    connectToWebSocket();
+  } else {
+    Serial.println("No master found, will keep trying");
+  }
   
-  webSocket.begin(masterIP, masterPort, "/");
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(5000);
-  
-  Serial.println("WebSocket connection initialized");
+  Serial.println("Setup complete");
 }
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
@@ -159,34 +266,48 @@ void sendDistanceReading() {
 
 bool wasConnected = false;
 unsigned long lastReconnectAttempt = 0;
+unsigned long lastDiscoveryCheck = 0;
 const unsigned long RECONNECT_INTERVAL = 3000;
+const unsigned long DISCOVERY_CHECK_INTERVAL = 5000;
 
 void loop() {
-  webSocket.loop();
-  
   unsigned long currentTime = millis();
   
-  bool isConnected = webSocket.isConnected();
-  if (isConnected != wasConnected) {
-    if (isConnected) {
-      Serial.println("Connection established");
-    } else {
-      Serial.println("Connection lost, will retry soon");
+  if (masterDiscovered) {
+    webSocket.loop();
+    
+    bool isConnected = webSocket.isConnected();
+    if (isConnected != wasConnected) {
+      if (isConnected) {
+        Serial.println("Connection established");
+      } else {
+        Serial.println("Connection lost, will retry soon");
+      }
+      wasConnected = isConnected;
     }
-    wasConnected = isConnected;
-  }
-  
-  if (!isConnected && (currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL)) {
-    Serial.println("Attempting to reconnect...");
-    lastReconnectAttempt = currentTime;
+    
+    if (!isConnected && (currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL)) {
+      Serial.println("Attempting to reconnect...");
+      lastReconnectAttempt = currentTime;
 
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    delay(50);
-    digitalWrite(GREEN_LED_PIN, LOW);
+      digitalWrite(GREEN_LED_PIN, HIGH);
+      delay(50);
+      digitalWrite(GREEN_LED_PIN, LOW);
+    }
+    
+    if (isConnected && (currentTime - lastReadingTime >= READ_INTERVAL)) {
+      sendDistanceReading();
+      lastReadingTime = currentTime;
+    }
+  } 
+  else if (currentTime - lastDiscoveryCheck >= DISCOVERY_CHECK_INTERVAL) {
+    Serial.println("Looking for master discovery broadcast...");
+    lastDiscoveryCheck = currentTime;
+    
+    if (listenForDiscovery(500)) {
+      connectToWebSocket();
+    }
   }
   
-  if (isConnected && (currentTime - lastReadingTime >= READ_INTERVAL)) {
-    sendDistanceReading();
-    lastReadingTime = currentTime;
-  }
+  delay(10);
 }

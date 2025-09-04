@@ -2,23 +2,31 @@
 #include <WebSocketsServer.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
+#include <WiFiUdp.h>
 
 const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
-// IP address for ESP32 (hardcoded)
-IPAddress local_IP(192, 168, 29, 30);
-IPAddress gateway(192, 168, 29, 1);
-IPAddress subnet(255, 255, 255, 0);
+WiFiUDP udp;
+const int UDP_PORT = 4210;
+const char* DISCOVERY_MESSAGE = "SMART_PARKING_MASTER";
 
-// WebSocket server
+const int DISCOVERY_BUTTON_PIN = 13; // D13
+bool buttonPressed = false;
+bool lastButtonState = HIGH;
+
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
 
-// Constants
 const int DISTANCE_THRESHOLD = 45;
 const int MAX_DISTANCE = 200;
 const unsigned long SYNC_INTERVAL = 5000;
+
+const unsigned long DISCOVERY_DURATION = 60000;
+const unsigned long DISCOVERY_INTERVAL = 5000;
+unsigned long discoveryStartTime = 0;
+unsigned long lastDiscoveryTime = 0;
+bool discoveryMode = false;
 
 struct ParkingSpot {
   int id;
@@ -95,6 +103,8 @@ const char mainPage[] PROGMEM = R"html(
       <p>Total Spots: <span id="totalSpots">0</span></p>
       <p>Available Spots: <span id="availableSpots">0</span></p>
       <p>Occupied Spots: <span id="occupiedSpots">0</span></p>
+      <button id="discoveryBtn" style="margin-top: 10px; padding: 8px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Start Discovery</button>
+      <span id="discoveryStatus" style="margin-left: 10px; display: none;">Discovery mode active...</span>
     </div>
     <div id="statusGrid" class="status-grid">
     </div>
@@ -111,13 +121,43 @@ const char mainPage[] PROGMEM = R"html(
       };
       
       socket.onmessage = function(event) {
-        updateParkingStatus(JSON.parse(event.data));
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'discovery_status') {
+          handleDiscoveryStatus(data);
+        } else if (data.spots) {
+          updateParkingStatus(data);
+        } else {
+          console.log('Received other message:', data);
+        }
       };
       
       socket.onclose = function() {
         console.log('WebSocket connection closed');
         setTimeout(connect, 2000);
       };
+      
+      document.getElementById('discoveryBtn').addEventListener('click', function() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          const message = JSON.stringify({ command: 'start_discovery' });
+          socket.send(message);
+          console.log('Discovery request sent');
+          
+          document.getElementById('discoveryStatus').style.display = 'inline';
+          setTimeout(function() {
+            document.getElementById('discoveryStatus').style.display = 'none';
+          }, 60000);
+        }
+      });
+    }
+    
+    function handleDiscoveryStatus(data) {
+      console.log('Discovery status:', data);
+      if (data.active) {
+        document.getElementById('discoveryStatus').style.display = 'inline';
+      } else {
+        document.getElementById('discoveryStatus').style.display = 'none';
+      }
     }
     
     function updateParkingStatus(data) {
@@ -128,6 +168,11 @@ const char mainPage[] PROGMEM = R"html(
       let occupiedCount = 0;
       
       console.log("Received parking data:", data);
+      
+      if (!data.spots || !Array.isArray(data.spots)) {
+        console.error("Invalid parking data format: missing spots array");
+        return;
+      }
       
       data.spots.forEach(spot => {
         const spotElement = document.createElement('div');
@@ -160,7 +205,6 @@ const char mainPage[] PROGMEM = R"html(
       document.getElementById('occupiedSpots').textContent = occupiedCount;
     }
     
-    // Connect when page loads
     window.onload = connect;
   </script>
 </body>
@@ -178,8 +222,27 @@ int findParkingSpotById(int id) {
   return -1;
 }
 
+void broadcastDiscovery() {
+  udp.beginPacket(IPAddress(255, 255, 255, 255), UDP_PORT);
+  
+  DynamicJsonDocument discoveryDoc(128);
+  discoveryDoc["type"] = "discovery";
+  discoveryDoc["message"] = DISCOVERY_MESSAGE;
+  discoveryDoc["ip"] = WiFi.localIP().toString();
+  discoveryDoc["port"] = 81;
+  
+  String discoveryJson;
+  serializeJson(discoveryDoc, discoveryJson);
+  
+  udp.write((const uint8_t*)discoveryJson.c_str(), discoveryJson.length());
+  udp.endPacket();
+  
+  Serial.println("Discovery broadcast sent: " + discoveryJson);
+}
+
 void broadcastParkingStatus() {
   DynamicJsonDocument doc(1024);
+  doc["type"] = "parking_status";
   JsonArray spots = doc.createNestedArray("spots");
   
   doc["serverTime"] = millis();
@@ -211,6 +274,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         
         delay(100);
         
+        DynamicJsonDocument statusDoc(128);
+        statusDoc["type"] = "discovery_status";
+        statusDoc["active"] = discoveryMode;
+        
+        String statusJson;
+        serializeJson(statusDoc, statusJson);
+        webSocket.sendTXT(num, statusJson);
+        
         broadcastParkingStatus();
       }
       break;
@@ -228,39 +299,59 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
           return;
         }
         
-        int id = doc["id"];
-        int distance = doc["distance"];
-        
-        int spotIndex = findParkingSpotById(id);
-        if (spotIndex == -1 && connectedSpots < MAX_SPOTS) {
-          // New spot
-          spotIndex = connectedSpots;
-          parkingSpots[spotIndex].id = id;
-          connectedSpots++;
-          Serial.printf("New parking spot added: ID %d\n", id);
+        const char* command = doc["command"];
+        if (command && strcmp(command, "start_discovery") == 0) {
+          Serial.println("Discovery command received from web interface");
+          
+          discoveryMode = true;
+          discoveryStartTime = millis();
+          lastDiscoveryTime = 0;
+          
+          DynamicJsonDocument responseDoc(128);
+          responseDoc["type"] = "discovery_status";
+          responseDoc["active"] = true;
+          
+          String responseJson;
+          serializeJson(responseDoc, responseJson);
+          webSocket.broadcastTXT(responseJson);
+          
+          return;
         }
         
-        if (spotIndex != -1) {
-          bool wasOccupied = parkingSpots[spotIndex].isOccupied;
+        if (doc.containsKey("id") && doc.containsKey("distance")) {
+          int id = doc["id"];
+          int distance = doc["distance"];
           
-          parkingSpots[spotIndex].distance = distance;
-          parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
-          parkingSpots[spotIndex].lastUpdate = millis();
+          int spotIndex = findParkingSpotById(id);
+          if (spotIndex == -1 && connectedSpots < MAX_SPOTS) {
+            spotIndex = connectedSpots;
+            parkingSpots[spotIndex].id = id;
+            connectedSpots++;
+            Serial.printf("New parking spot added: ID %d\n", id);
+          }
           
-          DynamicJsonDocument response(128);
-          response["id"] = id;
-          response["led"] = parkingSpots[spotIndex].isOccupied ? "red" : "green";
-          
-          String jsonResponse;
-          serializeJson(response, jsonResponse);
-          webSocket.sendTXT(num, jsonResponse);
-          
-          Serial.printf("Updated spot %d: distance=%d, occupied=%s\n", 
-                       id, distance, parkingSpots[spotIndex].isOccupied ? "yes" : "no");
-          
-          if (wasOccupied != parkingSpots[spotIndex].isOccupied) {
-            Serial.println("Spot status changed, broadcasting update to all clients");
-            broadcastParkingStatus();
+          if (spotIndex != -1) {
+            bool wasOccupied = parkingSpots[spotIndex].isOccupied;
+            
+            parkingSpots[spotIndex].distance = distance;
+            parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+            parkingSpots[spotIndex].lastUpdate = millis();
+            
+            DynamicJsonDocument response(128);
+            response["id"] = id;
+            response["led"] = parkingSpots[spotIndex].isOccupied ? "red" : "green";
+            
+            String jsonResponse;
+            serializeJson(response, jsonResponse);
+            webSocket.sendTXT(num, jsonResponse);
+            
+            Serial.printf("Updated spot %d: distance=%d, occupied=%s\n", 
+                         id, distance, parkingSpots[spotIndex].isOccupied ? "yes" : "no");
+            
+            if (wasOccupied != parkingSpots[spotIndex].isOccupied) {
+              Serial.println("Spot status changed, broadcasting update to all clients");
+              broadcastParkingStatus();
+            }
           }
         }
       }
@@ -279,9 +370,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Master - Smart Parking System");
   
-  if (!WiFi.config(local_IP, gateway, subnet)) {
-    Serial.println("Failed to configure static IP!");
-  }
+  pinMode(DISCOVERY_BUTTON_PIN, INPUT_PULLUP);
   
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -293,6 +382,14 @@ void setup() {
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+  
+  udp.begin(UDP_PORT);
+  Serial.print("UDP Discovery Service started on port ");
+  Serial.println(UDP_PORT);
+  
+  discoveryMode = true;
+  discoveryStartTime = millis();
+  lastDiscoveryTime = 0;
 
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
@@ -326,14 +423,40 @@ void setup() {
   lastSyncTime = millis();
 }
 
+void checkDiscoveryButton() {
+  bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
+  
+  if (buttonState == LOW && lastButtonState == HIGH) {
+    Serial.println("Discovery button pressed!");
+    
+    discoveryMode = true;
+    discoveryStartTime = millis();
+    lastDiscoveryTime = 0;
+  }
+  
+  lastButtonState = buttonState;
+}
+
 void loop() {
   unsigned long currentTime = millis();
   
+  checkDiscoveryButton();
+  
+  if (discoveryMode) {
+    if (currentTime - discoveryStartTime < DISCOVERY_DURATION) {
+      if (currentTime - lastDiscoveryTime >= DISCOVERY_INTERVAL) {
+        broadcastDiscovery();
+        lastDiscoveryTime = currentTime;
+      }
+    } else {
+      Serial.println("Discovery mode ended");
+      discoveryMode = false;
+    }
+  }
+  
   if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
     Serial.println("Syncing parking status...");
-    
     broadcastParkingStatus();
-    
     lastSyncTime = currentTime;
   }
   
