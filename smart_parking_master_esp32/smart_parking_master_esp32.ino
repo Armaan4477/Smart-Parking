@@ -54,7 +54,6 @@ const char mainPage[] PROGMEM = R"html(
 <head>
   <title>Smart Parking System</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
   <style>
     :root {
       --primary: #3498db;
@@ -104,12 +103,6 @@ const char mainPage[] PROGMEM = R"html(
       align-items: center;
     }
     
-    .logo i {
-      font-size: 2.5rem;
-      color: var(--primary);
-      margin-right: 15px;
-    }
-    
     h1 {
       font-size: 1.8rem;
       font-weight: 600;
@@ -147,11 +140,6 @@ const char mainPage[] PROGMEM = R"html(
       align-items: center;
     }
     
-    .card-header h2 i {
-      margin-right: 10px;
-      color: var(--primary);
-    }
-    
     .card-body {
       padding: 20px;
     }
@@ -177,11 +165,6 @@ const char mainPage[] PROGMEM = R"html(
     
     .stat-card:hover {
       transform: scale(1.05);
-    }
-    
-    .stat-card i {
-      font-size: 2rem;
-      margin-bottom: 10px;
     }
     
     .stat-card .stat-value {
@@ -218,10 +201,6 @@ const char mainPage[] PROGMEM = R"html(
       justify-content: center;
       transition: var(--transition);
       font-size: 0.9rem;
-    }
-    
-    .button i {
-      margin-right: 8px;
     }
     
     .button-primary {
@@ -329,11 +308,6 @@ const char mainPage[] PROGMEM = R"html(
       display: flex;
       align-items: center;
       justify-content: center;
-    }
-    
-    .spot-header i {
-      margin-right: 8px;
-      font-size: 1.2rem;
     }
     
     .spot-available .spot-header {
@@ -475,12 +449,6 @@ const char mainPage[] PROGMEM = R"html(
       margin-bottom: 15px;
     }
     
-    .editor-header i {
-      font-size: 1.2rem;
-      color: var(--primary);
-      margin-right: 8px;
-    }
-    
     .editor-title {
       font-size: 1.1rem;
       font-weight: 600;
@@ -573,12 +541,6 @@ const char mainPage[] PROGMEM = R"html(
       align-items: center;
     }
     
-    .section-header i {
-      margin-right: 10px;
-      color: var(--primary);
-      font-size: 1.2rem;
-    }
-    
     .section-title {
       font-size: 1.1rem;
       font-weight: 600;
@@ -591,7 +553,6 @@ const char mainPage[] PROGMEM = R"html(
   <div class="container">
     <div class="header">
       <div class="logo">
-        <i class="fas fa-parking"></i>
         <h1>Smart Parking System</h1>
       </div>
     </div>
@@ -599,19 +560,16 @@ const char mainPage[] PROGMEM = R"html(
     <!-- Dashboard Stats -->
     <div class="dashboard-stats">
       <div class="stat-card total-stat">
-        <i class="fas fa-car-alt"></i>
         <div class="stat-value" id="totalSpots">0</div>
         <div class="stat-label">Total Spots</div>
       </div>
       
       <div class="stat-card available-stat">
-        <i class="fas fa-check-circle"></i>
         <div class="stat-value" id="availableSpots">0</div>
         <div class="stat-label">Available</div>
       </div>
       
       <div class="stat-card occupied-stat">
-        <i class="fas fa-ban"></i>
         <div class="stat-value" id="occupiedSpots">0</div>
         <div class="stat-label">Occupied</div>
       </div>
@@ -620,15 +578,15 @@ const char mainPage[] PROGMEM = R"html(
     <!-- Discovery Section -->
     <div class="card">
       <div class="card-header">
-        <h2><i class="fas fa-broadcast-tower"></i> Device Discovery</h2>
+        <h2>Device Discovery</h2>
       </div>
       <div class="card-body">
         <div class="discovery-controls">
           <button id="startDiscoveryBtn" class="button button-primary">
-            <i class="fas fa-search"></i> Start Discovery
+            Start Discovery
           </button>
           <button id="stopDiscoveryBtn" class="button button-danger">
-            <i class="fas fa-stop"></i> Stop Discovery
+            Stop Discovery
           </button>
           <span id="discoveryStatus" class="discovery-status">Discovery mode active...</span>
         </div>
@@ -638,11 +596,10 @@ const char mainPage[] PROGMEM = R"html(
     <!-- Device Management -->
     <div class="card">
       <div class="card-header">
-        <h2><i class="fas fa-server"></i> Device Management</h2>
+        <h2>Device Management</h2>
       </div>
       <div class="card-body">
         <div class="section-header">
-          <i class="fas fa-list"></i>
           <h3 class="section-title">Connected Devices</h3>
         </div>
         
@@ -652,7 +609,6 @@ const char mainPage[] PROGMEM = R"html(
         
         <div id="deviceEditor" class="device-editor">
           <div class="editor-header">
-            <i class="fas fa-edit"></i>
             <h3 class="editor-title">Edit Device <span id="editDeviceId"></span></h3>
           </div>
           
@@ -667,13 +623,13 @@ const char mainPage[] PROGMEM = R"html(
           
           <div class="editor-actions">
             <button id="saveDeviceBtn" class="button button-primary">
-              <i class="fas fa-save"></i> Save Changes
+              Save Changes
             </button>
             <button id="removeDeviceBtn" class="button button-danger">
-              <i class="fas fa-trash"></i> Remove Device
+              Remove Device
             </button>
             <button id="cancelEditBtn" class="button button-secondary">
-              <i class="fas fa-times"></i> Cancel
+              Cancel
             </button>
           </div>
         </div>
@@ -683,7 +639,7 @@ const char mainPage[] PROGMEM = R"html(
     <!-- Parking Status Grid -->
     <div class="card">
       <div class="card-header">
-        <h2><i class="fas fa-map-marker-alt"></i> Parking Status</h2>
+        <h2>Parking Status</h2>
       </div>
       <div class="card-body">
         <div id="statusGrid" class="parking-grid">
@@ -890,21 +846,17 @@ const char mainPage[] PROGMEM = R"html(
         
         let spotClass = '';
         let spotStatus = '';
-        let spotIcon = '';
         
         if (isOffline) {
           spotClass = 'parking-spot spot-offline';
           spotStatus = 'Offline';
-          spotIcon = 'fa-exclamation-triangle';
         } else if (spot.isOccupied) {
           spotClass = 'parking-spot spot-occupied';
           spotStatus = 'Occupied';
-          spotIcon = 'fa-ban';
           occupiedCount++;
         } else {
           spotClass = 'parking-spot spot-available';
           spotStatus = 'Available';
-          spotIcon = 'fa-check-circle';
           availableCount++;
         }
         
@@ -914,7 +866,6 @@ const char mainPage[] PROGMEM = R"html(
         newHtml += `
           <div id="spot-${spotId}" class="${spotClass}">
             <div class="spot-header">
-              <i class="fas ${spotIcon}"></i>
               <span>${spotStatus}</span>
             </div>
             <div class="spot-body">
@@ -979,7 +930,6 @@ const char mainPage[] PROGMEM = R"html(
       if (!spots || !Array.isArray(spots) || spots.length === 0) {
         deviceList.innerHTML = `
           <div class="empty-state" style="text-align: center; padding: 30px 0;">
-            <i class="fas fa-search" style="font-size: 2rem; color: #bdc3c7; margin-bottom: 10px;"></i>
             <p style="color: #7f8c8d; font-size: 0.9rem;">No devices registered</p>
             <p style="color: #95a5a6; font-size: 0.8rem; margin-top: 5px;">
               Use the discovery mode to find and register devices
@@ -1009,7 +959,7 @@ const char mainPage[] PROGMEM = R"html(
             </div>
             <div class="device-buttons">
               <button onclick="openDeviceEditor({id: ${device.id}, mac: '${deviceMac}'})">
-                <i class="fas fa-edit"></i> Edit
+                Edit
               </button>
             </div>
           </div>
