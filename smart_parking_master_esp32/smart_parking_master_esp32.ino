@@ -11,7 +11,8 @@ WiFiUDP udp;
 const int UDP_PORT = 4210;
 const char* DISCOVERY_MESSAGE = "SMART_PARKING_MASTER";
 
-const int DISCOVERY_BUTTON_PIN = 13; // D13
+const int DISCOVERY_BUTTON_PIN = 32;
+const int DISCOVERY_LED_PIN = 33;
 bool buttonPressed = false;
 bool lastButtonState = HIGH;
 
@@ -103,7 +104,10 @@ const char mainPage[] PROGMEM = R"html(
       <p>Total Spots: <span id="totalSpots">0</span></p>
       <p>Available Spots: <span id="availableSpots">0</span></p>
       <p>Occupied Spots: <span id="occupiedSpots">0</span></p>
-      <button id="discoveryBtn" style="margin-top: 10px; padding: 8px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Start Discovery</button>
+      <div style="display: flex; gap: 10px;">
+        <button id="startDiscoveryBtn" style="margin-top: 10px; padding: 8px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Start Discovery</button>
+        <button id="stopDiscoveryBtn" style="margin-top: 10px; padding: 8px 15px; background-color: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">Stop Discovery</button>
+      </div>
       <span id="discoveryStatus" style="margin-left: 10px; display: none;">Discovery mode active...</span>
     </div>
     <div id="statusGrid" class="status-grid">
@@ -137,26 +141,42 @@ const char mainPage[] PROGMEM = R"html(
         setTimeout(connect, 2000);
       };
       
-      document.getElementById('discoveryBtn').addEventListener('click', function() {
+      document.getElementById('startDiscoveryBtn').addEventListener('click', function() {
         if (socket && socket.readyState === WebSocket.OPEN) {
           const message = JSON.stringify({ command: 'start_discovery' });
           socket.send(message);
-          console.log('Discovery request sent');
-          
-          document.getElementById('discoveryStatus').style.display = 'inline';
-          setTimeout(function() {
-            document.getElementById('discoveryStatus').style.display = 'none';
-          }, 60000);
+          console.log('Start discovery request sent');
+        }
+      });
+      
+      document.getElementById('stopDiscoveryBtn').addEventListener('click', function() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          const message = JSON.stringify({ command: 'stop_discovery' });
+          socket.send(message);
+          console.log('Stop discovery request sent');
         }
       });
     }
     
     function handleDiscoveryStatus(data) {
       console.log('Discovery status:', data);
+      const statusEl = document.getElementById('discoveryStatus');
+      
       if (data.active) {
-        document.getElementById('discoveryStatus').style.display = 'inline';
+        statusEl.textContent = 'Discovery mode active...';
+        statusEl.style.display = 'inline';
+        statusEl.style.color = '#28a745'; // Green color for active status
+        document.getElementById('startDiscoveryBtn').disabled = true;
+        document.getElementById('stopDiscoveryBtn').disabled = false;
       } else {
-        document.getElementById('discoveryStatus').style.display = 'none';
+        statusEl.textContent = 'Discovery mode stopped';
+        statusEl.style.display = 'inline';
+        statusEl.style.color = '#dc3545'; // Red color for inactive status
+        setTimeout(function() {
+          statusEl.style.display = 'none';
+        }, 3000);
+        document.getElementById('startDiscoveryBtn').disabled = false;
+        document.getElementById('stopDiscoveryBtn').disabled = true;
       }
     }
     
@@ -205,7 +225,11 @@ const char mainPage[] PROGMEM = R"html(
       document.getElementById('occupiedSpots').textContent = occupiedCount;
     }
     
-    window.onload = connect;
+    window.onload = function() {
+      connect();
+      document.getElementById('startDiscoveryBtn').disabled = false;
+      document.getElementById('stopDiscoveryBtn').disabled = true;
+    };
   </script>
 </body>
 </html>
@@ -301,15 +325,33 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         
         const char* command = doc["command"];
         if (command && strcmp(command, "start_discovery") == 0) {
-          Serial.println("Discovery command received from web interface");
+          Serial.println("Start discovery command received from web interface");
           
           discoveryMode = true;
           discoveryStartTime = millis();
           lastDiscoveryTime = 0;
+          digitalWrite(DISCOVERY_LED_PIN, HIGH);
           
           DynamicJsonDocument responseDoc(128);
           responseDoc["type"] = "discovery_status";
           responseDoc["active"] = true;
+          
+          String responseJson;
+          serializeJson(responseDoc, responseJson);
+          webSocket.broadcastTXT(responseJson);
+          
+          return;
+        }
+        
+        if (command && strcmp(command, "stop_discovery") == 0) {
+          Serial.println("Stop discovery command received from web interface");
+          
+          discoveryMode = false;
+          digitalWrite(DISCOVERY_LED_PIN, LOW);
+          
+          DynamicJsonDocument responseDoc(128);
+          responseDoc["type"] = "discovery_status";
+          responseDoc["active"] = false;
           
           String responseJson;
           serializeJson(responseDoc, responseJson);
@@ -371,6 +413,8 @@ void setup() {
   Serial.println("ESP32 Master - Smart Parking System");
   
   pinMode(DISCOVERY_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DISCOVERY_LED_PIN, OUTPUT);
+  digitalWrite(DISCOVERY_LED_PIN, LOW);
   
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -432,6 +476,15 @@ void checkDiscoveryButton() {
     discoveryMode = true;
     discoveryStartTime = millis();
     lastDiscoveryTime = 0;
+    digitalWrite(DISCOVERY_LED_PIN, HIGH);
+    
+    DynamicJsonDocument responseDoc(128);
+    responseDoc["type"] = "discovery_status";
+    responseDoc["active"] = true;
+    
+    String responseJson;
+    serializeJson(responseDoc, responseJson);
+    webSocket.broadcastTXT(responseJson);
   }
   
   lastButtonState = buttonState;
@@ -444,6 +497,12 @@ void loop() {
   
   if (discoveryMode) {
     if (currentTime - discoveryStartTime < DISCOVERY_DURATION) {
+      if (currentTime % 500 < 250) {
+        digitalWrite(DISCOVERY_LED_PIN, HIGH);
+      } else {
+        digitalWrite(DISCOVERY_LED_PIN, LOW);
+      }
+      
       if (currentTime - lastDiscoveryTime >= DISCOVERY_INTERVAL) {
         broadcastDiscovery();
         lastDiscoveryTime = currentTime;
@@ -451,7 +510,18 @@ void loop() {
     } else {
       Serial.println("Discovery mode ended");
       discoveryMode = false;
+      digitalWrite(DISCOVERY_LED_PIN, LOW);
+      
+      DynamicJsonDocument responseDoc(128);
+      responseDoc["type"] = "discovery_status";
+      responseDoc["active"] = false;
+      
+      String responseJson;
+      serializeJson(responseDoc, responseJson);
+      webSocket.broadcastTXT(responseJson);
     }
+  } else {
+    digitalWrite(DISCOVERY_LED_PIN, LOW);
   }
   
   if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
