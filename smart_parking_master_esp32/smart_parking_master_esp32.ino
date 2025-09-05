@@ -236,6 +236,7 @@ const char mainPage[] PROGMEM = R"html(
 )html";
 
 TaskHandle_t WebUITask;
+TaskHandle_t SyncTask;
 
 int findParkingSpotById(int id) {
   for (int i = 0; i < connectedSpots; i++) {
@@ -408,6 +409,44 @@ void webUITaskFunction(void * parameter) {
   }
 }
 
+void syncTaskFunction(void * parameter) {
+  unsigned long lastSyncTime = 0;
+  unsigned long lastDiscoveryTime = 0;
+  
+  for(;;) {
+    unsigned long currentTime = millis();
+    
+    if (discoveryMode) {
+      if (currentTime - discoveryStartTime < DISCOVERY_DURATION) {
+        if (currentTime - lastDiscoveryTime >= DISCOVERY_INTERVAL) {
+          broadcastDiscovery();
+          lastDiscoveryTime = currentTime;
+        }
+      } else {
+        Serial.println("Discovery mode ended");
+        discoveryMode = false;
+        digitalWrite(DISCOVERY_LED_PIN, LOW);
+        
+        DynamicJsonDocument responseDoc(128);
+        responseDoc["type"] = "discovery_status";
+        responseDoc["active"] = false;
+        
+        String responseJson;
+        serializeJson(responseDoc, responseJson);
+        webSocket.broadcastTXT(responseJson);
+      }
+    }
+    
+    if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
+      Serial.println("Syncing parking status...");
+      broadcastParkingStatus();
+      lastSyncTime = currentTime;
+    }
+    
+    delay(100);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Master - Smart Parking System");
@@ -464,7 +503,15 @@ void setup() {
     1
   );
   
-  lastSyncTime = millis();
+  xTaskCreatePinnedToCore(
+    syncTaskFunction,
+    "SyncTask",
+    10000,
+    NULL,
+    1,
+    &SyncTask,
+    0
+  );
 }
 
 void checkDiscoveryButton() {
@@ -496,38 +543,13 @@ void loop() {
   checkDiscoveryButton();
   
   if (discoveryMode) {
-    if (currentTime - discoveryStartTime < DISCOVERY_DURATION) {
-      if (currentTime % 500 < 250) {
-        digitalWrite(DISCOVERY_LED_PIN, HIGH);
-      } else {
-        digitalWrite(DISCOVERY_LED_PIN, LOW);
-      }
-      
-      if (currentTime - lastDiscoveryTime >= DISCOVERY_INTERVAL) {
-        broadcastDiscovery();
-        lastDiscoveryTime = currentTime;
-      }
+    if (currentTime % 500 < 250) {
+      digitalWrite(DISCOVERY_LED_PIN, HIGH);
     } else {
-      Serial.println("Discovery mode ended");
-      discoveryMode = false;
       digitalWrite(DISCOVERY_LED_PIN, LOW);
-      
-      DynamicJsonDocument responseDoc(128);
-      responseDoc["type"] = "discovery_status";
-      responseDoc["active"] = false;
-      
-      String responseJson;
-      serializeJson(responseDoc, responseJson);
-      webSocket.broadcastTXT(responseJson);
     }
   } else {
     digitalWrite(DISCOVERY_LED_PIN, LOW);
-  }
-  
-  if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
-    Serial.println("Syncing parking status...");
-    broadcastParkingStatus();
-    lastSyncTime = currentTime;
   }
   
   delay(100);
