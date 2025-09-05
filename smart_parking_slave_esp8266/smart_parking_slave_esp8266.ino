@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 #include <WiFiUdp.h>
 
-const char* ssid = "Free Public Wi-Fi";
+const char* ssid = "JoeMama";
 const char* password = "2A0R0M4AAN";
 
 String masterIP = "";
@@ -12,7 +12,7 @@ bool masterDiscovered = false;
 
 WiFiUDP udp;
 const int UDP_PORT = 4210;
-const char* DISCOVERY_MESSAGE = "SMART_PARKING_MASTER";
+const char* DISCOVERY_MESSAGE = "SMART_PARKING";
 
 // Discovery timeout
 const unsigned long DISCOVERY_TIMEOUT = 60000;
