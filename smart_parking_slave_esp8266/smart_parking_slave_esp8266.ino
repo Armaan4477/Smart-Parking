@@ -14,16 +14,15 @@ WiFiUDP udp;
 const int UDP_PORT = 4210;
 const char* DISCOVERY_MESSAGE = "SMART_PARKING";
 
-// Discovery timeout
 const unsigned long DISCOVERY_TIMEOUT = 60000;
 unsigned long discoveryStartTime = 0;
 
-const int DEVICE_ID = 1;  // Unique ID for this slave
+String deviceMAC = "";
+int deviceID = -1;
 
 const int TRIG_PIN = 5;  // Trigger pin connected to D1
 const int ECHO_PIN = 4;  // Echo pin connected to D2
 
-// LED pins
 const int RED_LED_PIN = 2;    // D4
 const int GREEN_LED_PIN = 0;  // D3
 
@@ -149,6 +148,9 @@ void setup() {
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
   
+  deviceMAC = WiFi.macAddress();
+  Serial.println("Device MAC: " + deviceMAC);
+  
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -182,43 +184,66 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
       
     case WStype_CONNECTED:
-      Serial.println("Connected to WebSocket server");
+      {
+        Serial.println("Connected to WebSocket server");
 
-      digitalWrite(GREEN_LED_PIN, HIGH);
-      delay(100);
-      digitalWrite(GREEN_LED_PIN, LOW);
-      delay(100);
-      digitalWrite(GREEN_LED_PIN, HIGH);
-      delay(100);
-      digitalWrite(GREEN_LED_PIN, LOW);
-      
-      sendDistanceReading();
+        digitalWrite(GREEN_LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(GREEN_LED_PIN, LOW);
+        delay(100);
+        digitalWrite(GREEN_LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(GREEN_LED_PIN, LOW);
+        
+        DynamicJsonDocument regDoc(256);
+        regDoc["type"] = "register";
+        regDoc["mac"] = deviceMAC;
+        regDoc["currentId"] = deviceID;
+        
+        String regJson;
+        serializeJson(regDoc, regJson);
+        webSocket.sendTXT(regJson);
+        Serial.println("Sent registration request with MAC: " + deviceMAC);
+      }
       break;
       
     case WStype_TEXT:
-      Serial.printf("Received text: %s\n", payload);
-      
-      DynamicJsonDocument doc(128);
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (error) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(error.c_str());
-        return;
-      }
-      
-      int receivedId = doc["id"];
-      if (receivedId == DEVICE_ID) {
-        String ledStatus = doc["led"];
+      {
+        Serial.printf("Received text: %s\n", payload);
         
-        if (ledStatus == "red") {
-          digitalWrite(RED_LED_PIN, HIGH);
-          digitalWrite(GREEN_LED_PIN, LOW);
-          Serial.println("Setting RED LED ON (spot occupied)");
-        } else if (ledStatus == "green") {
-          digitalWrite(RED_LED_PIN, LOW);
-          digitalWrite(GREEN_LED_PIN, HIGH);
-          Serial.println("Setting GREEN LED ON (spot available)");
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+          Serial.print("deserializeJson() failed: ");
+          Serial.println(error.c_str());
+          return;
+        }
+        
+        if (doc.containsKey("type") && strcmp(doc["type"], "id_assigned") == 0) {
+          int newId = doc["assigned_id"];
+          deviceID = newId;
+          Serial.printf("Master assigned ID: %d to this device\n", deviceID);
+          
+          sendDistanceReading();
+          return;
+        }
+        
+        if (doc.containsKey("id")) {
+          int receivedId = doc["id"];
+          if (receivedId == deviceID) {
+            String ledStatus = doc["led"];
+            
+            if (ledStatus == "red") {
+              digitalWrite(RED_LED_PIN, HIGH);
+              digitalWrite(GREEN_LED_PIN, LOW);
+              Serial.println("Setting RED LED ON (spot occupied)");
+            } else if (ledStatus == "green") {
+              digitalWrite(RED_LED_PIN, LOW);
+              digitalWrite(GREEN_LED_PIN, HIGH);
+              Serial.println("Setting GREEN LED ON (spot available)");
+            }
+          }
         }
       }
       break;
@@ -246,10 +271,16 @@ int readDistance() {
 
 void sendDistanceReading() {
   if (webSocket.isConnected()) {
+    if (deviceID < 0) {
+      Serial.println("No valid device ID assigned yet. Cannot send reading.");
+      return;
+    }
+    
     distance = readDistance();
     
-    DynamicJsonDocument doc(128);
-    doc["id"] = DEVICE_ID;
+    DynamicJsonDocument doc(256);
+    doc["id"] = deviceID;
+    doc["mac"] = deviceMAC;
     doc["distance"] = distance;
     
     String jsonString;
