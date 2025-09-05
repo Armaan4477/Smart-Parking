@@ -15,6 +15,7 @@ const int DISCOVERY_BUTTON_PIN = 32;
 const int DISCOVERY_LED_PIN = 33;
 bool buttonPressed = false;
 bool lastButtonState = HIGH;
+bool physicalOverrideActive = false;
 
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
@@ -163,11 +164,18 @@ const char mainPage[] PROGMEM = R"html(
       const statusEl = document.getElementById('discoveryStatus');
       
       if (data.active) {
-        statusEl.textContent = 'Discovery mode active...';
+        if (data.physical_override) {
+          statusEl.textContent = 'Discovery mode active (Physical button override)';
+          statusEl.style.color = '#007bff'; // Blue color for physical override
+          document.getElementById('startDiscoveryBtn').disabled = true;
+          document.getElementById('stopDiscoveryBtn').disabled = true; // Disable both buttons during physical override
+        } else {
+          statusEl.textContent = 'Discovery mode active...';
+          statusEl.style.color = '#28a745'; // Green color for software active status
+          document.getElementById('startDiscoveryBtn').disabled = true;
+          document.getElementById('stopDiscoveryBtn').disabled = false;
+        }
         statusEl.style.display = 'inline';
-        statusEl.style.color = '#28a745'; // Green color for active status
-        document.getElementById('startDiscoveryBtn').disabled = true;
-        document.getElementById('stopDiscoveryBtn').disabled = false;
       } else {
         statusEl.textContent = 'Discovery mode stopped';
         statusEl.style.display = 'inline';
@@ -177,6 +185,10 @@ const char mainPage[] PROGMEM = R"html(
         }, 3000);
         document.getElementById('startDiscoveryBtn').disabled = false;
         document.getElementById('stopDiscoveryBtn').disabled = true;
+      }
+      
+      if (data.message) {
+        console.log('Status message:', data.message);
       }
     }
     
@@ -347,16 +359,31 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         if (command && strcmp(command, "stop_discovery") == 0) {
           Serial.println("Stop discovery command received from web interface");
           
-          discoveryMode = false;
-          digitalWrite(DISCOVERY_LED_PIN, LOW);
-          
-          DynamicJsonDocument responseDoc(128);
-          responseDoc["type"] = "discovery_status";
-          responseDoc["active"] = false;
-          
-          String responseJson;
-          serializeJson(responseDoc, responseJson);
-          webSocket.broadcastTXT(responseJson);
+          if (!physicalOverrideActive) {
+            discoveryMode = false;
+            digitalWrite(DISCOVERY_LED_PIN, LOW);
+            
+            DynamicJsonDocument responseDoc(128);
+            responseDoc["type"] = "discovery_status";
+            responseDoc["active"] = false;
+            responseDoc["physical_override"] = false;
+            
+            String responseJson;
+            serializeJson(responseDoc, responseJson);
+            webSocket.broadcastTXT(responseJson);
+          } else {
+            Serial.println("Cannot stop discovery: Physical override is active");
+            
+            DynamicJsonDocument responseDoc(128);
+            responseDoc["type"] = "discovery_status";
+            responseDoc["active"] = true;
+            responseDoc["physical_override"] = true;
+            responseDoc["message"] = "Cannot stop discovery while physical button is pressed";
+            
+            String responseJson;
+            serializeJson(responseDoc, responseJson);
+            webSocket.sendTXT(num, responseJson);
+          }
           
           return;
         }
@@ -417,19 +444,20 @@ void syncTaskFunction(void * parameter) {
     unsigned long currentTime = millis();
     
     if (discoveryMode) {
-      if (currentTime - discoveryStartTime < DISCOVERY_DURATION) {
+      if (physicalOverrideActive || (currentTime - discoveryStartTime < DISCOVERY_DURATION)) {
         if (currentTime - lastDiscoveryTime >= DISCOVERY_INTERVAL) {
           broadcastDiscovery();
           lastDiscoveryTime = currentTime;
         }
       } else {
-        Serial.println("Discovery mode ended");
+        Serial.println("Discovery mode ended due to timeout");
         discoveryMode = false;
         digitalWrite(DISCOVERY_LED_PIN, LOW);
         
         DynamicJsonDocument responseDoc(128);
         responseDoc["type"] = "discovery_status";
         responseDoc["active"] = false;
+        responseDoc["physical_override"] = false;
         
         String responseJson;
         serializeJson(responseDoc, responseJson);
@@ -518,8 +546,9 @@ void checkDiscoveryButton() {
   bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
   
   if (buttonState == LOW && lastButtonState == HIGH) {
-    Serial.println("Discovery button pressed!");
+    Serial.println("Discovery button pressed - physical override activated!");
     
+    physicalOverrideActive = true;
     discoveryMode = true;
     discoveryStartTime = millis();
     lastDiscoveryTime = 0;
@@ -528,6 +557,25 @@ void checkDiscoveryButton() {
     DynamicJsonDocument responseDoc(128);
     responseDoc["type"] = "discovery_status";
     responseDoc["active"] = true;
+    responseDoc["physical_override"] = true;
+    
+    String responseJson;
+    serializeJson(responseDoc, responseJson);
+    webSocket.broadcastTXT(responseJson);
+  }
+  
+  if (buttonState == HIGH && lastButtonState == LOW) {
+    Serial.println("Discovery button released - physical override deactivated!");
+    physicalOverrideActive = false;
+    
+    discoveryMode = false;
+    digitalWrite(DISCOVERY_LED_PIN, LOW);
+    
+    DynamicJsonDocument responseDoc(128);
+    responseDoc["type"] = "discovery_status";
+    responseDoc["active"] = false;
+    responseDoc["physical_override"] = false;
+    responseDoc["message"] = "Discovery mode stopped due to button release";
     
     String responseJson;
     serializeJson(responseDoc, responseJson);
@@ -539,18 +587,35 @@ void checkDiscoveryButton() {
 
 void loop() {
   unsigned long currentTime = millis();
-  
+
   checkDiscoveryButton();
   
+  bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
+  
+  if (buttonState == LOW) {
+    physicalOverrideActive = true;
+    discoveryMode = true;
+  } else {
+    physicalOverrideActive = false;
+  }
+  
   if (discoveryMode) {
-    if (currentTime % 500 < 250) {
-      digitalWrite(DISCOVERY_LED_PIN, HIGH);
+    if (physicalOverrideActive) {
+      if (currentTime % 300 < 150) {
+        digitalWrite(DISCOVERY_LED_PIN, HIGH);
+      } else {
+        digitalWrite(DISCOVERY_LED_PIN, LOW);
+      }
     } else {
-      digitalWrite(DISCOVERY_LED_PIN, LOW);
+      if (currentTime % 500 < 250) {
+        digitalWrite(DISCOVERY_LED_PIN, HIGH);
+      } else {
+        digitalWrite(DISCOVERY_LED_PIN, LOW);
+      }
     }
   } else {
     digitalWrite(DISCOVERY_LED_PIN, LOW);
   }
   
-  delay(100);
+  delay(50);
 }
