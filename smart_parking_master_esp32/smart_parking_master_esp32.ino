@@ -31,12 +31,18 @@ unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
+const unsigned long OFFLINE_DETECTION_WINDOW = 10000;
+unsigned long firstOfflineTime = 0;
+int offlineCount = 0;
+bool wifiDisconnectionDetected = false;
+
 struct ParkingSpot {
   int id;
   String macAddress;
   int distance;
   bool isOccupied;
   unsigned long lastUpdate;
+  bool hasSensorError = false;
 };
 
 const int MAX_SPOTS = 10;
@@ -190,6 +196,10 @@ const char mainPage[] PROGMEM = R"html(
       background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
     }
     
+    .error-stat {
+      background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+    }
+    
     .button {
       border: none;
       border-radius: 6px;
@@ -322,6 +332,10 @@ const char mainPage[] PROGMEM = R"html(
       background: linear-gradient(135deg, #f39c12, #d35400);
     }
     
+    .spot-error .spot-header {
+      background: linear-gradient(135deg, #9b59b6, #8e44ad);
+    }
+    
     .spot-body {
       background-color: white;
       padding: 12px;
@@ -410,6 +424,11 @@ const char mainPage[] PROGMEM = R"html(
     .status-offline .status-indicator {
       background-color: var(--warning);
       box-shadow: 0 0 0 2px rgba(243, 156, 18, 0.2);
+    }
+    
+    .status-error .status-indicator {
+      background-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(155, 89, 182, 0.2);
     }
     
     .device-buttons button {
@@ -573,6 +592,11 @@ const char mainPage[] PROGMEM = R"html(
         <div class="stat-value" id="occupiedSpots">0</div>
         <div class="stat-label">Occupied</div>
       </div>
+      
+      <div class="stat-card error-stat">
+        <div class="stat-value" id="errorSpots">0</div>
+        <div class="stat-label">Sensor Errors</div>
+      </div>
     </div>
     
     <!-- Discovery Section -->
@@ -604,7 +628,6 @@ const char mainPage[] PROGMEM = R"html(
         </div>
         
         <div id="deviceList" class="device-list">
-          <!-- Devices will be loaded here -->
         </div>
         
         <div id="deviceEditor" class="device-editor">
@@ -636,14 +659,12 @@ const char mainPage[] PROGMEM = R"html(
       </div>
     </div>
     
-    <!-- Parking Status Grid -->
     <div class="card">
       <div class="card-header">
         <h2>Parking Status</h2>
       </div>
       <div class="card-body">
         <div id="statusGrid" class="parking-grid">
-          <!-- Parking spots will be loaded here -->
         </div>
       </div>
     </div>
@@ -658,7 +679,6 @@ const char mainPage[] PROGMEM = R"html(
     var lastParkingState = {};
     
     function showNotification(message, type = 'success') {
-      // Create notification element if it doesn't exist
       let notificationContainer = document.getElementById('notificationContainer');
       if (!notificationContainer) {
         notificationContainer = document.createElement('div');
@@ -673,7 +693,6 @@ const char mainPage[] PROGMEM = R"html(
         document.body.appendChild(notificationContainer);
       }
       
-      // Create notification
       const notification = document.createElement('div');
       notification.style = `
         background-color: ${type === 'success' ? '#2ecc71' : type === 'error' ? '#e74c3c' : '#f39c12'};
@@ -683,16 +702,30 @@ const char mainPage[] PROGMEM = R"html(
         border-radius: 8px;
         box-shadow: 0 3px 10px rgba(0,0,0,0.1);
         font-size: 14px;
-        font-weight: 500;
+        font-weight: ${type === 'error' ? '600' : '500'};
         animation: slideIn 0.3s, fadeOut 0.3s 2.7s;
         opacity: 0;
+        border-left: 4px solid ${type === 'success' ? '#27ae60' : type === 'error' ? '#c0392b' : '#e67e22'};
+        display: flex;
+        align-items: center;
       `;
       notification.style.animation = 'slideIn 0.3s forwards';
-      notification.textContent = message;
+      const icon = document.createElement('div');
+      icon.style = `
+        margin-right: 10px;
+        font-size: 18px;
+        font-weight: bold;
+      `;
+      icon.innerHTML = type === 'success' ? 'OK' : type === 'error' ? 'ERROR' : 'WARNING';
+      
+      const textSpan = document.createElement('span');
+      textSpan.textContent = message;
+      
+      notification.appendChild(icon);
+      notification.appendChild(textSpan);
       
       notificationContainer.appendChild(notification);
       
-      // Remove notification after 3 seconds
       setTimeout(() => {
         notification.style.animation = 'fadeOut 0.3s forwards';
         setTimeout(() => {
@@ -721,6 +754,9 @@ const char mainPage[] PROGMEM = R"html(
         } else if (data.type === 'error') {
           showNotification(data.message, 'error');
           console.error('Error:', data.message);
+        } else if (data.type === 'notification') {
+          showNotification(data.message, data.notificationType || 'info');
+          console.log('Notification:', data.message);
         } else {
           console.log('Received other message:', data);
         }
@@ -807,6 +843,7 @@ const char mainPage[] PROGMEM = R"html(
       
       let availableCount = 0;
       let occupiedCount = 0;
+      let errorCount = 0;
       
       console.log("Received parking data:", data);
       
@@ -815,7 +852,6 @@ const char mainPage[] PROGMEM = R"html(
         return;
       }
       
-      // Track changes for animations
       const changedSpots = [];
       
       data.spots.forEach(spot => {
@@ -828,20 +864,32 @@ const char mainPage[] PROGMEM = R"html(
         const timeSinceUpdate = currentServerTime - (spot.lastUpdate || 0);
         const isOffline = currentServerTime > 0 && timeSinceUpdate > 10000;
         
-        // Check if status changed for animation
         const previousSpot = lastParkingState[spotId];
         const statusChanged = previousSpot && 
           (previousSpot.isOffline !== isOffline || 
-           (!isOffline && previousSpot.isOccupied !== spot.isOccupied));
+           previousSpot.hasSensorError !== !!spot.sensorError ||
+           (!isOffline && !spot.sensorError && previousSpot.isOccupied !== spot.isOccupied));
         
-        // Update our state tracking
         lastParkingState[spotId] = { 
-          isOffline: isOffline, 
+          isOffline: isOffline,
+          hasSensorError: !!spot.sensorError,
           isOccupied: !!spot.isOccupied 
         };
         
         if (statusChanged) {
           changedSpots.push(spotId);
+          
+          if (previousSpot) {
+            if (!previousSpot.isOffline && isOffline) {
+              showNotification(`Spot ${spotId} went offline`, 'warning');
+            } else if (previousSpot.isOffline && !isOffline) {
+              showNotification(`Spot ${spotId} is back online`, 'success');
+            } else if (!previousSpot.hasSensorError && spot.sensorError) {
+              showNotification(`Sensor error detected on Spot ${spotId}`, 'error');
+            } else if (previousSpot.hasSensorError && !spot.sensorError) {
+              showNotification(`Sensor on Spot ${spotId} is working again`, 'success');
+            }
+          }
         }
         
         let spotClass = '';
@@ -850,6 +898,10 @@ const char mainPage[] PROGMEM = R"html(
         if (isOffline) {
           spotClass = 'parking-spot spot-offline';
           spotStatus = 'Offline';
+        } else if (spot.sensorError) {
+          spotClass = 'parking-spot spot-error';
+          spotStatus = 'Sensor Error';
+          errorCount++;
         } else if (spot.isOccupied) {
           spotClass = 'parking-spot spot-occupied';
           spotStatus = 'Occupied';
@@ -872,6 +924,7 @@ const char mainPage[] PROGMEM = R"html(
               <div class="spot-id">Spot ${spotId}</div>
               <div class="spot-status">
                 ${isOffline ? 'Last seen: ' + formatTimeSince(timeSinceUpdate) + ' ago' : 
+                  spot.sensorError ? 'Sensor Error: Check hardware' : 
                   'Distance: ' + distanceText}
               </div>
             </div>
@@ -882,7 +935,6 @@ const char mainPage[] PROGMEM = R"html(
       // Update the grid
       statusGrid.innerHTML = newHtml;
       
-      // Apply animations to changed spots
       setTimeout(() => {
         changedSpots.forEach(id => {
           const spotElement = document.getElementById(`spot-${id}`);
@@ -897,10 +949,10 @@ const char mainPage[] PROGMEM = R"html(
         });
       }, 50);
       
-      // Update stat counters with animation
       animateCounter('totalSpots', data.spots.length);
       animateCounter('availableSpots', availableCount);
       animateCounter('occupiedSpots', occupiedCount);
+      animateCounter('errorSpots', errorCount);
       
       updateDeviceManagement(data.spots, data.serverTime);
     }
@@ -952,9 +1004,9 @@ const char mainPage[] PROGMEM = R"html(
             <div class="device-info">
               <span class="device-id">ID ${device.id}</span>
               <span class="device-mac">${deviceMac}</span>
-              <span class="device-status ${isOffline ? 'status-offline' : 'status-online'}">
+              <span class="device-status ${isOffline ? 'status-offline' : device.sensorError ? 'status-error' : 'status-online'}">
                 <span class="status-indicator"></span>
-                ${isOffline ? 'Offline' : 'Online'}
+                ${isOffline ? 'Offline' : device.sensorError ? 'Sensor Error' : 'Online'}
               </span>
             </div>
             <div class="device-buttons">
@@ -1115,63 +1167,105 @@ int findParkingSpotByMac(String macAddress) {
 
 void loadDeviceMappings() {
   nextAvailableId = preferences.getInt("next_id", 1);
-  Serial.printf("Loaded nextAvailableId: %d\n", nextAvailableId);
+  int storedConnectedSpots = preferences.getInt("num_spots", 0);
+
+  Serial.printf("Loaded nextAvailableId: %d, stored spots: %d\n", nextAvailableId, storedConnectedSpots);
 
   for (int i = 0; i < MAX_SPOTS; i++) {
-    String keyStr = "mac_" + String(i + 1);
-    const char* key = keyStr.c_str();
+    String idStr = String(i + 1);
+    String macKey = "mac_" + idStr;
 
-    String storedMac = preferences.getString(key, "");
+    String storedMac = preferences.getString(macKey.c_str(), "");
 
     if (storedMac.length() > 0) {
-      Serial.printf("Loaded mapping: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
-      if (i >= connectedSpots) {
+      Serial.printf("Found stored device: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
+
+      if (connectedSpots < MAX_SPOTS) {
         parkingSpots[connectedSpots].id = i + 1;
         parkingSpots[connectedSpots].macAddress = storedMac;
         parkingSpots[connectedSpots].distance = 0;
         parkingSpots[connectedSpots].isOccupied = false;
-        parkingSpots[connectedSpots].lastUpdate = 0;
+        parkingSpots[connectedSpots].lastUpdate = millis() - 20000;
+        parkingSpots[connectedSpots].hasSensorError = false;
         connectedSpots++;
+
+        Serial.printf("Restored device mapping: ID %d -> MAC %s (slot %d)\n",
+                      i + 1, storedMac.c_str(), connectedSpots - 1);
       }
     }
+  }
+
+  Serial.printf("Loaded %d device mappings from EEPROM\n", connectedSpots);
+
+  for (int i = 0; i < connectedSpots; i++) {
+    if (parkingSpots[i].id >= nextAvailableId) {
+      nextAvailableId = parkingSpots[i].id + 1;
+    }
+  }
+
+  if (nextAvailableId != preferences.getInt("next_id", 1)) {
+    preferences.putInt("next_id", nextAvailableId);
+    Serial.printf("Updated nextAvailableId to %d\n", nextAvailableId);
   }
 }
 
 void saveDeviceMapping(int id, String macAddress) {
-  String keyStr = "mac_" + String(id);
-  const char* key = keyStr.c_str();
-  preferences.putString(key, macAddress);
-  preferences.putInt("next_id", nextAvailableId);
+  String idStr = String(id);
+  String macKey = "mac_" + idStr;
+
+  preferences.putString(macKey.c_str(), macAddress);
+
+  if (id >= nextAvailableId) {
+    nextAvailableId = id + 1;
+    preferences.putInt("next_id", nextAvailableId);
+  }
+
   preferences.putInt("num_spots", connectedSpots);
-  Serial.printf("Saved mapping: ID %d -> MAC %s\n", id, macAddress.c_str());
+
+  Serial.printf("Saved device mapping: ID %d -> MAC %s\n", id, macAddress.c_str());
 }
 
 void removeDeviceMapping(int id) {
-  String keyStr = "mac_" + String(id);
-  const char* key = keyStr.c_str();
-  preferences.remove(key);
-  Serial.printf("Removed mapping for ID %d\n", id);
+  String idStr = String(id);
+  String macKey = "mac_" + idStr;
+
+  preferences.remove(macKey.c_str());
+
+  preferences.putInt("num_spots", connectedSpots);
+
+  Serial.printf("Removed device mapping for ID %d from EEPROM\n", id);
+
+  Serial.println("Current device mappings after removal:");
+  for (int i = 0; i < connectedSpots; i++) {
+    Serial.printf("  Slot %d: ID %d -> MAC %s\n",
+                  i, parkingSpots[i].id, parkingSpots[i].macAddress.c_str());
+  }
 }
 
 int registerDevice(String macAddress, int requestedId) {
   int existingSpotIndex = findParkingSpotByMac(macAddress);
 
   if (existingSpotIndex >= 0) {
-    return parkingSpots[existingSpotIndex].id;
+    int existingId = parkingSpots[existingSpotIndex].id;
+    Serial.printf("Device with MAC %s already registered as ID %d\n", macAddress.c_str(), existingId);
+    return existingId;
   }
 
   if (requestedId > 0 && requestedId <= MAX_SPOTS) {
     if (findParkingSpotById(requestedId) == -1) {
+      Serial.printf("Using requested ID %d for device with MAC %s\n", requestedId, macAddress.c_str());
       return requestedId;
     }
   }
 
   for (int i = 1; i <= MAX_SPOTS; i++) {
     if (findParkingSpotById(i) == -1) {
+      Serial.printf("Assigning next available ID %d to device with MAC %s\n", i, macAddress.c_str());
       return i;
     }
   }
 
+  Serial.printf("ERROR: No available IDs for device with MAC %s\n", macAddress.c_str());
   return -1;
 }
 
@@ -1207,11 +1301,37 @@ void broadcastParkingStatus() {
     spot["distance"] = parkingSpots[i].distance;
     spot["isOccupied"] = parkingSpots[i].isOccupied;
     spot["lastUpdate"] = parkingSpots[i].lastUpdate;
+    spot["sensorError"] = parkingSpots[i].hasSensorError;
   }
 
   String jsonString;
   serializeJson(doc, jsonString);
   webSocket.broadcastTXT(jsonString);
+}
+
+bool checkWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi connection lost! Attempting to reconnect...");
+
+    WiFi.reconnect();
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(100);
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi reconnected successfully");
+      Serial.print("IP address: ");
+      Serial.println(WiFi.localIP());
+      return true;
+    } else {
+      Serial.println("Failed to reconnect to WiFi");
+      return false;
+    }
+  }
+  return true;
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
@@ -1336,6 +1456,20 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             Serial.printf("Updated device ID: MAC %s, ID %d -> %d\n",
                           mac.c_str(), oldId, newId);
 
+            for (int i = 0; i < webSocket.connectedClients(); i++) {
+              IPAddress clientIP = webSocket.remoteIP(i);
+              DynamicJsonDocument idUpdateDoc(256);
+              idUpdateDoc["type"] = "id_update";
+              idUpdateDoc["old_id"] = oldId;
+              idUpdateDoc["new_id"] = newId;
+              idUpdateDoc["mac"] = mac;
+
+              String idUpdateJson;
+              serializeJson(idUpdateDoc, idUpdateJson);
+              webSocket.sendTXT(i, idUpdateJson);
+              Serial.printf("Sent ID update notification to client %d\n", i);
+            }
+
             broadcastParkingStatus();
           } else {
             DynamicJsonDocument responseDoc(256);
@@ -1381,6 +1515,27 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           return;
         }
 
+        if (doc.containsKey("type") && strcmp(doc["type"], "id_update_confirm") == 0) {
+          String macAddress = doc["mac"];
+          int oldId = doc["old_id"];
+          int newId = doc["new_id"];
+
+          Serial.printf("Received ID update confirmation from device MAC: %s (ID changed from %d to %d)\n",
+                        macAddress.c_str(), oldId, newId);
+
+          DynamicJsonDocument notifyDoc(256);
+          notifyDoc["type"] = "notification";
+          notifyDoc["message"] = "Device " + macAddress + " confirmed ID change from " + String(oldId) + " to " + String(newId);
+          notifyDoc["notificationType"] = "success";
+
+          String notifyJson;
+          serializeJson(notifyDoc, notifyJson);
+
+          webSocket.broadcastTXT(notifyJson);
+
+          return;
+        }
+
         if (doc.containsKey("type") && strcmp(doc["type"], "register") == 0) {
           String macAddress = doc["mac"].as<String>();
           int currentId = doc["currentId"] | -1;
@@ -1391,27 +1546,68 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           int spotIndex = findParkingSpotByMac(macAddress);
           int assignedId = -1;
 
+          bool wasOffline = false;
+          if (spotIndex != -1) {
+            unsigned long timeSinceLastUpdate = millis() - parkingSpots[spotIndex].lastUpdate;
+            if (timeSinceLastUpdate > 10000) {
+              wasOffline = true;
+            }
+          }
+
           if (spotIndex != -1) {
             assignedId = parkingSpots[spotIndex].id;
             Serial.printf("Device with MAC %s already registered with ID %d\n",
                           macAddress.c_str(), assignedId);
+
+            parkingSpots[spotIndex].lastUpdate = millis();
+
+            if (currentId > 0 && currentId != assignedId) {
+              Serial.printf("WARNING: Device with MAC %s requested ID %d but is registered as ID %d\n",
+                            macAddress.c_str(), currentId, assignedId);
+            }
           } else if (connectedSpots < MAX_SPOTS) {
-            assignedId = registerDevice(macAddress, currentId);
+
+            bool foundInEEPROM = false;
+            int storedId = -1;
+
+            for (int i = 1; i <= MAX_SPOTS; i++) {
+              String macKey = "mac_" + String(i);
+              String storedMac = preferences.getString(macKey.c_str(), "");
+
+              if (storedMac == macAddress) {
+                foundInEEPROM = true;
+                storedId = i;
+                break;
+              }
+            }
+
+            if (foundInEEPROM) {
+              if (findParkingSpotById(storedId) == -1) {
+                assignedId = storedId;
+                Serial.printf("Re-using stored ID %d for returning device with MAC %s\n",
+                              assignedId, macAddress.c_str());
+              } else {
+                assignedId = registerDevice(macAddress, currentId);
+                Serial.printf("Device with MAC %s had stored ID %d but that's in use now, assigning new ID %d\n",
+                              macAddress.c_str(), storedId, assignedId);
+              }
+            } else {
+              assignedId = registerDevice(macAddress, currentId);
+              Serial.printf("Registering new device with MAC %s as ID %d\n",
+                            macAddress.c_str(), assignedId);
+            }
+
             if (assignedId > 0) {
               spotIndex = connectedSpots;
               parkingSpots[spotIndex].id = assignedId;
               parkingSpots[spotIndex].macAddress = macAddress;
               parkingSpots[spotIndex].distance = 0;
               parkingSpots[spotIndex].isOccupied = false;
+              parkingSpots[spotIndex].hasSensorError = false;
               parkingSpots[spotIndex].lastUpdate = millis();
               connectedSpots++;
 
               saveDeviceMapping(assignedId, macAddress);
-
-              if (assignedId >= nextAvailableId) {
-                nextAvailableId = assignedId + 1;
-                preferences.putInt("next_id", nextAvailableId);
-              }
 
               Serial.printf("New device registered: MAC %s -> ID %d\n",
                             macAddress.c_str(), assignedId);
@@ -1431,6 +1627,17 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           serializeJson(response, jsonResponse);
           webSocket.sendTXT(num, jsonResponse);
 
+          if (wasOffline && assignedId > 0) {
+            DynamicJsonDocument notifyDoc(256);
+            notifyDoc["type"] = "notification";
+            notifyDoc["message"] = "Spot " + String(assignedId) + " is back online";
+            notifyDoc["notificationType"] = "success";
+
+            String notifyJson;
+            serializeJson(notifyDoc, notifyJson);
+            webSocket.broadcastTXT(notifyJson);
+          }
+
           return;
         }
 
@@ -1438,6 +1645,29 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           int id = doc["id"];
           int distance = doc["distance"];
           String macAddress = doc["mac"].as<String>();
+          bool hasSensorError = false;
+
+          if (doc.containsKey("error") && strcmp(doc["error"], "sensor_error") == 0) {
+            bool prevErrorState = false;
+            int spotIndex = findParkingSpotById(id);
+            if (spotIndex != -1) {
+              prevErrorState = parkingSpots[spotIndex].hasSensorError;
+            }
+
+            hasSensorError = true;
+            Serial.printf("Sensor error reported by device ID %d (MAC: %s)\n", id, macAddress.c_str());
+
+            if (spotIndex != -1 && !prevErrorState) {
+              DynamicJsonDocument notifyDoc(256);
+              notifyDoc["type"] = "notification";
+              notifyDoc["message"] = "Sensor error detected on spot " + String(id);
+              notifyDoc["notificationType"] = "error";
+
+              String notifyJson;
+              serializeJson(notifyDoc, notifyJson);
+              webSocket.broadcastTXT(notifyJson);
+            }
+          }
 
           int spotIndex = findParkingSpotById(id);
           if (spotIndex == -1 && connectedSpots < MAX_SPOTS) {
@@ -1447,13 +1677,32 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
           if (spotIndex != -1) {
             bool wasOccupied = parkingSpots[spotIndex].isOccupied;
+            bool hadSensorError = parkingSpots[spotIndex].hasSensorError;
 
             if (macAddress.length() > 0) {
               parkingSpots[spotIndex].macAddress = macAddress;
             }
+
             parkingSpots[spotIndex].distance = distance;
-            parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+
+            if (!hasSensorError) {
+              parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+            }
+
             parkingSpots[spotIndex].lastUpdate = millis();
+
+            parkingSpots[spotIndex].hasSensorError = hasSensorError;
+
+            if (hadSensorError && !hasSensorError) {
+              DynamicJsonDocument notifyDoc(256);
+              notifyDoc["type"] = "notification";
+              notifyDoc["message"] = "Sensor on spot " + String(id) + " is working again";
+              notifyDoc["notificationType"] = "success";
+
+              String notifyJson;
+              serializeJson(notifyDoc, notifyJson);
+              webSocket.broadcastTXT(notifyJson);
+            }
 
             DynamicJsonDocument response(128);
             response["id"] = id;
@@ -1488,6 +1737,8 @@ void webUITaskFunction(void* parameter) {
 void syncTaskFunction(void* parameter) {
   unsigned long lastSyncTime = 0;
   unsigned long lastDiscoveryTime = 0;
+  unsigned long lastConnectivityCheck = 0;
+  int previousActiveSpots = 0;
 
   for (;;) {
     unsigned long currentTime = millis();
@@ -1516,12 +1767,149 @@ void syncTaskFunction(void* parameter) {
 
     if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
       Serial.println("Syncing parking status...");
+
+      int activeSpots = 0;
+      int offlineSpots = 0;
+      int recentlyOfflineSpots = 0;
+
+      for (int i = 0; i < connectedSpots; i++) {
+        unsigned long timeSinceUpdate = currentTime - parkingSpots[i].lastUpdate;
+        bool wasOffline = timeSinceUpdate > 10000;
+        bool isNowOffline = timeSinceUpdate > 10000;
+
+        static unsigned long lastOfflineCheckTime = 0;
+        static bool spotOfflineStatus[MAX_SPOTS] = { false };
+
+        if (currentTime - lastOfflineCheckTime >= 5000) {
+          if (!spotOfflineStatus[i] && isNowOffline) {
+            DynamicJsonDocument notifyDoc(256);
+            notifyDoc["type"] = "notification";
+            notifyDoc["message"] = "Spot " + String(parkingSpots[i].id) + " went offline";
+            notifyDoc["notificationType"] = "warning";
+
+            String notifyJson;
+            serializeJson(notifyDoc, notifyJson);
+            webSocket.broadcastTXT(notifyJson);
+
+            spotOfflineStatus[i] = true;
+          }
+
+          if (i == connectedSpots - 1) {
+            lastOfflineCheckTime = currentTime;
+          }
+        }
+
+        if (timeSinceUpdate <= 10000) {
+          activeSpots++;
+          spotOfflineStatus[i] = false;
+        } else {
+          offlineSpots++;
+
+          if (parkingSpots[i].lastUpdate > 0 && parkingSpots[i].lastUpdate > currentTime - OFFLINE_DETECTION_WINDOW) {
+            recentlyOfflineSpots++;
+
+            if (firstOfflineTime == 0) {
+              firstOfflineTime = currentTime;
+              offlineCount = 1;
+            } else {
+              offlineCount++;
+            }
+          }
+        }
+      }
+
+      Serial.printf("Active spots: %d, Offline spots: %d, Recently offline: %d\n",
+                    activeSpots, offlineSpots, recentlyOfflineSpots);
+
+      if (firstOfflineTime > 0 && currentTime - firstOfflineTime > OFFLINE_DETECTION_WINDOW) {
+        Serial.println("Resetting offline detection window");
+        firstOfflineTime = 0;
+        offlineCount = 0;
+      }
+
+      int previousTotal = previousActiveSpots;
+      if (previousTotal > 0 && offlineCount > 0) {
+        float offlinePercentage = (float)offlineCount / previousTotal;
+
+        Serial.printf("Offline percentage: %.1f%% (%d out of previous %d)\n",
+                      offlinePercentage * 100, offlineCount, previousTotal);
+
+        if (offlinePercentage >= 0.5 && !discoveryMode) {
+          Serial.println("ALERT: Multiple slaves went offline! Checking WiFi connection...");
+
+          bool wifiOK = checkWiFiConnection();
+
+          if (!wifiOK) {
+            Serial.println("WiFi connection issue detected! Starting discovery mode...");
+            wifiDisconnectionDetected = true;
+          } else {
+            Serial.println("WiFi connection is OK, but slaves are offline. Starting discovery mode...");
+          }
+
+          discoveryMode = true;
+          discoveryStartTime = currentTime;
+          lastDiscoveryTime = 0;
+          digitalWrite(DISCOVERY_LED_PIN, HIGH);
+
+          DynamicJsonDocument responseDoc(256);
+          responseDoc["type"] = "discovery_status";
+          responseDoc["active"] = true;
+          responseDoc["physical_override"] = false;
+          responseDoc["message"] = wifiOK ? "Discovery mode activated due to multiple slaves offline" : "Discovery mode activated due to WiFi connection issue";
+
+          String responseJson;
+          serializeJson(responseDoc, responseJson);
+          webSocket.broadcastTXT(responseJson);
+
+          firstOfflineTime = 0;
+          offlineCount = 0;
+        }
+      }
+
+      previousActiveSpots = activeSpots;
+
       broadcastParkingStatus();
       lastSyncTime = currentTime;
     }
 
     delay(100);
   }
+}
+
+void WiFiEventHandler(WiFiEvent_t event) {
+  switch (event) {
+    case WIFI_EVENT_STA_DISCONNECTED:
+      Serial.println("WiFi lost connection");
+      wifiDisconnectionDetected = true;
+      break;
+    case IP_EVENT_STA_GOT_IP:
+      Serial.println("WiFi connected with IP: ");
+      Serial.println(WiFi.localIP());
+      wifiDisconnectionDetected = false;
+      break;
+    default:
+      break;
+  }
+}
+
+void printStoredDeviceMappings() {
+  Serial.println("\n--- STORED DEVICE MAPPINGS ---");
+  Serial.printf("Next available ID: %d\n", preferences.getInt("next_id", 1));
+  Serial.printf("Stored spots count: %d\n", preferences.getInt("num_spots", 0));
+
+  int foundMappings = 0;
+  for (int i = 1; i <= MAX_SPOTS; i++) {
+    String macKey = "mac_" + String(i);
+    String storedMac = preferences.getString(macKey.c_str(), "");
+
+    if (storedMac.length() > 0) {
+      Serial.printf("ID %d -> MAC %s\n", i, storedMac.c_str());
+      foundMappings++;
+    }
+  }
+
+  Serial.printf("Found %d stored mappings in EEPROM\n", foundMappings);
+  Serial.println("----------------------------\n");
 }
 
 void setup() {
@@ -1533,6 +1921,11 @@ void setup() {
   digitalWrite(DISCOVERY_LED_PIN, LOW);
 
   preferences.begin("smartpark", false);
+
+  Serial.println("Initializing device mapping storage in EEPROM...");
+  printStoredDeviceMappings();
+
+  WiFi.onEvent(WiFiEventHandler);
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -1570,6 +1963,7 @@ void setup() {
     parkingSpots[i].macAddress = "";
     parkingSpots[i].distance = 0;
     parkingSpots[i].isOccupied = false;
+    parkingSpots[i].hasSensorError = false;
     parkingSpots[i].lastUpdate = 0;
   }
 
@@ -1639,6 +2033,7 @@ void checkDiscoveryButton() {
 
 void loop() {
   unsigned long currentTime = millis();
+  static unsigned long lastWiFiCheck = 0;
 
   checkDiscoveryButton();
 
@@ -1649,6 +2044,15 @@ void loop() {
     discoveryMode = true;
   } else {
     physicalOverrideActive = false;
+  }
+
+  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
+    Serial.println("Periodic WiFi connection check...");
+    if (checkWiFiConnection()) {
+      wifiDisconnectionDetected = false;
+      Serial.println("WiFi connection restored");
+    }
+    lastWiFiCheck = currentTime;
   }
 
   if (discoveryMode) {
