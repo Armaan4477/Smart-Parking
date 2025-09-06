@@ -716,7 +716,7 @@ const char mainPage[] PROGMEM = R"html(
         font-size: 18px;
         font-weight: bold;
       `;
-      icon.innerHTML = type === 'success' ? '✓' : type === 'error' ? '✗' : '⚠';
+      icon.innerHTML = type === 'success' ? 'OK' : type === 'error' ? 'ERROR' : 'WARNING';
       
       const textSpan = document.createElement('span');
       textSpan.textContent = message;
