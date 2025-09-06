@@ -1167,63 +1167,105 @@ int findParkingSpotByMac(String macAddress) {
 
 void loadDeviceMappings() {
   nextAvailableId = preferences.getInt("next_id", 1);
-  Serial.printf("Loaded nextAvailableId: %d\n", nextAvailableId);
+  int storedConnectedSpots = preferences.getInt("num_spots", 0);
+
+  Serial.printf("Loaded nextAvailableId: %d, stored spots: %d\n", nextAvailableId, storedConnectedSpots);
 
   for (int i = 0; i < MAX_SPOTS; i++) {
-    String keyStr = "mac_" + String(i + 1);
-    const char* key = keyStr.c_str();
+    String idStr = String(i + 1);
+    String macKey = "mac_" + idStr;
 
-    String storedMac = preferences.getString(key, "");
+    String storedMac = preferences.getString(macKey.c_str(), "");
 
     if (storedMac.length() > 0) {
-      Serial.printf("Loaded mapping: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
-      if (i >= connectedSpots) {
+      Serial.printf("Found stored device: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
+
+      if (connectedSpots < MAX_SPOTS) {
         parkingSpots[connectedSpots].id = i + 1;
         parkingSpots[connectedSpots].macAddress = storedMac;
         parkingSpots[connectedSpots].distance = 0;
         parkingSpots[connectedSpots].isOccupied = false;
         parkingSpots[connectedSpots].lastUpdate = 0;
+        parkingSpots[connectedSpots].hasSensorError = false;
         connectedSpots++;
+
+        Serial.printf("Restored device mapping: ID %d -> MAC %s (slot %d)\n",
+                      i + 1, storedMac.c_str(), connectedSpots - 1);
       }
     }
+  }
+
+  Serial.printf("Loaded %d device mappings from EEPROM\n", connectedSpots);
+
+  for (int i = 0; i < connectedSpots; i++) {
+    if (parkingSpots[i].id >= nextAvailableId) {
+      nextAvailableId = parkingSpots[i].id + 1;
+    }
+  }
+
+  if (nextAvailableId != preferences.getInt("next_id", 1)) {
+    preferences.putInt("next_id", nextAvailableId);
+    Serial.printf("Updated nextAvailableId to %d\n", nextAvailableId);
   }
 }
 
 void saveDeviceMapping(int id, String macAddress) {
-  String keyStr = "mac_" + String(id);
-  const char* key = keyStr.c_str();
-  preferences.putString(key, macAddress);
-  preferences.putInt("next_id", nextAvailableId);
+  String idStr = String(id);
+  String macKey = "mac_" + idStr;
+
+  preferences.putString(macKey.c_str(), macAddress);
+
+  if (id >= nextAvailableId) {
+    nextAvailableId = id + 1;
+    preferences.putInt("next_id", nextAvailableId);
+  }
+
   preferences.putInt("num_spots", connectedSpots);
-  Serial.printf("Saved mapping: ID %d -> MAC %s\n", id, macAddress.c_str());
+
+  Serial.printf("Saved device mapping: ID %d -> MAC %s\n", id, macAddress.c_str());
 }
 
 void removeDeviceMapping(int id) {
-  String keyStr = "mac_" + String(id);
-  const char* key = keyStr.c_str();
-  preferences.remove(key);
-  Serial.printf("Removed mapping for ID %d\n", id);
+  String idStr = String(id);
+  String macKey = "mac_" + idStr;
+
+  preferences.remove(macKey.c_str());
+
+  preferences.putInt("num_spots", connectedSpots);
+
+  Serial.printf("Removed device mapping for ID %d from EEPROM\n", id);
+
+  Serial.println("Current device mappings after removal:");
+  for (int i = 0; i < connectedSpots; i++) {
+    Serial.printf("  Slot %d: ID %d -> MAC %s\n",
+                  i, parkingSpots[i].id, parkingSpots[i].macAddress.c_str());
+  }
 }
 
 int registerDevice(String macAddress, int requestedId) {
   int existingSpotIndex = findParkingSpotByMac(macAddress);
 
   if (existingSpotIndex >= 0) {
-    return parkingSpots[existingSpotIndex].id;
+    int existingId = parkingSpots[existingSpotIndex].id;
+    Serial.printf("Device with MAC %s already registered as ID %d\n", macAddress.c_str(), existingId);
+    return existingId;
   }
 
   if (requestedId > 0 && requestedId <= MAX_SPOTS) {
     if (findParkingSpotById(requestedId) == -1) {
+      Serial.printf("Using requested ID %d for device with MAC %s\n", requestedId, macAddress.c_str());
       return requestedId;
     }
   }
 
   for (int i = 1; i <= MAX_SPOTS; i++) {
     if (findParkingSpotById(i) == -1) {
+      Serial.printf("Assigning next available ID %d to device with MAC %s\n", i, macAddress.c_str());
       return i;
     }
   }
 
+  Serial.printf("ERROR: No available IDs for device with MAC %s\n", macAddress.c_str());
   return -1;
 }
 
@@ -1414,6 +1456,20 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             Serial.printf("Updated device ID: MAC %s, ID %d -> %d\n",
                           mac.c_str(), oldId, newId);
 
+            for (int i = 0; i < webSocket.connectedClients(); i++) {
+              IPAddress clientIP = webSocket.remoteIP(i);
+              DynamicJsonDocument idUpdateDoc(256);
+              idUpdateDoc["type"] = "id_update";
+              idUpdateDoc["old_id"] = oldId;
+              idUpdateDoc["new_id"] = newId;
+              idUpdateDoc["mac"] = mac;
+
+              String idUpdateJson;
+              serializeJson(idUpdateDoc, idUpdateJson);
+              webSocket.sendTXT(i, idUpdateJson);
+              Serial.printf("Sent ID update notification to client %d\n", i);
+            }
+
             broadcastParkingStatus();
           } else {
             DynamicJsonDocument responseDoc(256);
@@ -1459,6 +1515,27 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           return;
         }
 
+        if (doc.containsKey("type") && strcmp(doc["type"], "id_update_confirm") == 0) {
+          String macAddress = doc["mac"];
+          int oldId = doc["old_id"];
+          int newId = doc["new_id"];
+
+          Serial.printf("Received ID update confirmation from device MAC: %s (ID changed from %d to %d)\n",
+                        macAddress.c_str(), oldId, newId);
+
+          DynamicJsonDocument notifyDoc(256);
+          notifyDoc["type"] = "notification";
+          notifyDoc["message"] = "Device " + macAddress + " confirmed ID change from " + String(oldId) + " to " + String(newId);
+          notifyDoc["notificationType"] = "success";
+
+          String notifyJson;
+          serializeJson(notifyDoc, notifyJson);
+
+          webSocket.broadcastTXT(notifyJson);
+
+          return;
+        }
+
         if (doc.containsKey("type") && strcmp(doc["type"], "register") == 0) {
           String macAddress = doc["mac"].as<String>();
           int currentId = doc["currentId"] | -1;
@@ -1481,23 +1558,56 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             assignedId = parkingSpots[spotIndex].id;
             Serial.printf("Device with MAC %s already registered with ID %d\n",
                           macAddress.c_str(), assignedId);
+
+            parkingSpots[spotIndex].lastUpdate = millis();
+
+            if (currentId > 0 && currentId != assignedId) {
+              Serial.printf("WARNING: Device with MAC %s requested ID %d but is registered as ID %d\n",
+                            macAddress.c_str(), currentId, assignedId);
+            }
           } else if (connectedSpots < MAX_SPOTS) {
-            assignedId = registerDevice(macAddress, currentId);
+
+            bool foundInEEPROM = false;
+            int storedId = -1;
+
+            for (int i = 1; i <= MAX_SPOTS; i++) {
+              String macKey = "mac_" + String(i);
+              String storedMac = preferences.getString(macKey.c_str(), "");
+
+              if (storedMac == macAddress) {
+                foundInEEPROM = true;
+                storedId = i;
+                break;
+              }
+            }
+
+            if (foundInEEPROM) {
+              if (findParkingSpotById(storedId) == -1) {
+                assignedId = storedId;
+                Serial.printf("Re-using stored ID %d for returning device with MAC %s\n",
+                              assignedId, macAddress.c_str());
+              } else {
+                assignedId = registerDevice(macAddress, currentId);
+                Serial.printf("Device with MAC %s had stored ID %d but that's in use now, assigning new ID %d\n",
+                              macAddress.c_str(), storedId, assignedId);
+              }
+            } else {
+              assignedId = registerDevice(macAddress, currentId);
+              Serial.printf("Registering new device with MAC %s as ID %d\n",
+                            macAddress.c_str(), assignedId);
+            }
+
             if (assignedId > 0) {
               spotIndex = connectedSpots;
               parkingSpots[spotIndex].id = assignedId;
               parkingSpots[spotIndex].macAddress = macAddress;
               parkingSpots[spotIndex].distance = 0;
               parkingSpots[spotIndex].isOccupied = false;
+              parkingSpots[spotIndex].hasSensorError = false;
               parkingSpots[spotIndex].lastUpdate = millis();
               connectedSpots++;
 
               saveDeviceMapping(assignedId, macAddress);
-
-              if (assignedId >= nextAvailableId) {
-                nextAvailableId = assignedId + 1;
-                preferences.putInt("next_id", nextAvailableId);
-              }
 
               Serial.printf("New device registered: MAC %s -> ID %d\n",
                             macAddress.c_str(), assignedId);
@@ -1782,6 +1892,26 @@ void WiFiEventHandler(WiFiEvent_t event) {
   }
 }
 
+void printStoredDeviceMappings() {
+  Serial.println("\n--- STORED DEVICE MAPPINGS ---");
+  Serial.printf("Next available ID: %d\n", preferences.getInt("next_id", 1));
+  Serial.printf("Stored spots count: %d\n", preferences.getInt("num_spots", 0));
+
+  int foundMappings = 0;
+  for (int i = 1; i <= MAX_SPOTS; i++) {
+    String macKey = "mac_" + String(i);
+    String storedMac = preferences.getString(macKey.c_str(), "");
+
+    if (storedMac.length() > 0) {
+      Serial.printf("ID %d -> MAC %s\n", i, storedMac.c_str());
+      foundMappings++;
+    }
+  }
+
+  Serial.printf("Found %d stored mappings in EEPROM\n", foundMappings);
+  Serial.println("----------------------------\n");
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Master - Smart Parking System");
@@ -1791,6 +1921,9 @@ void setup() {
   digitalWrite(DISCOVERY_LED_PIN, LOW);
 
   preferences.begin("smartpark", false);
+
+  Serial.println("Initializing device mapping storage in EEPROM...");
+  printStoredDeviceMappings();
 
   WiFi.onEvent(WiFiEventHandler);
 
@@ -1830,6 +1963,7 @@ void setup() {
     parkingSpots[i].macAddress = "";
     parkingSpots[i].distance = 0;
     parkingSpots[i].isOccupied = false;
+    parkingSpots[i].hasSensorError = false;
     parkingSpots[i].lastUpdate = 0;
   }
 

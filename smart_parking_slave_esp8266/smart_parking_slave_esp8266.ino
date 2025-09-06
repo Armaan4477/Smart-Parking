@@ -40,53 +40,52 @@ bool sensorError = false;
 bool listenForDiscovery(unsigned long timeout) {
   unsigned long startTime = millis();
   Serial.println("Listening for master discovery broadcast...");
-  
+
   disconnectionStartTime = 0;
   wasConnected = false;
-  
+
   digitalWrite(RED_LED_PIN, HIGH);
   digitalWrite(GREEN_LED_PIN, HIGH);
-  
+
   udp.begin(UDP_PORT);
-  
+
   while (millis() - startTime < timeout) {
     int packetSize = udp.parsePacket();
     if (packetSize) {
-      Serial.printf("Received UDP packet of size %d from %s:%d\n", 
-                   packetSize, udp.remoteIP().toString().c_str(), udp.remotePort());
-      
+      Serial.printf("Received UDP packet of size %d from %s:%d\n",
+                    packetSize, udp.remoteIP().toString().c_str(), udp.remotePort());
+
       char packetBuffer[256];
       int len = udp.read(packetBuffer, 255);
       if (len > 0) {
         packetBuffer[len] = 0;
       }
-      
+
       Serial.printf("Packet contents: %s\n", packetBuffer);
-      
+
       DynamicJsonDocument doc(256);
       DeserializationError error = deserializeJson(doc, packetBuffer);
-      
+
       if (error) {
         Serial.print("deserializeJson() failed: ");
         Serial.println(error.c_str());
         continue;
       }
-      
+
       const char* type = doc["type"];
       const char* message = doc["message"];
-      
-      if (type && message && strcmp(type, "discovery") == 0 && 
-          strcmp(message, DISCOVERY_MESSAGE) == 0) {
-        
+
+      if (type && message && strcmp(type, "discovery") == 0 && strcmp(message, DISCOVERY_MESSAGE) == 0) {
+
         const char* ip = doc["ip"];
         int port = doc["port"];
-        
+
         if (ip) {
           masterIP = String(ip);
           if (port > 0) {
             masterPort = port;
           }
-          
+
           Serial.printf("Master discovered at %s:%d\n", masterIP.c_str(), masterPort);
 
           for (int i = 0; i < 3; i++) {
@@ -95,12 +94,12 @@ bool listenForDiscovery(unsigned long timeout) {
             digitalWrite(GREEN_LED_PIN, LOW);
             delay(100);
           }
-          
+
           return true;
         }
       }
     }
-    
+
     if (millis() % 500 < 250) {
       digitalWrite(RED_LED_PIN, HIGH);
       digitalWrite(GREEN_LED_PIN, LOW);
@@ -108,22 +107,22 @@ bool listenForDiscovery(unsigned long timeout) {
       digitalWrite(RED_LED_PIN, LOW);
       digitalWrite(GREEN_LED_PIN, HIGH);
     }
-    
+
     delay(10);
   }
-  
+
   Serial.println("Discovery timeout!");
-  
+
   for (int i = 0; i < 5; i++) {
     digitalWrite(RED_LED_PIN, HIGH);
     delay(100);
     digitalWrite(RED_LED_PIN, LOW);
     delay(100);
   }
-  
+
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(GREEN_LED_PIN, LOW);
-  
+
   return false;
 }
 
@@ -148,45 +147,45 @@ void setup() {
   pinMode(GREEN_LED_PIN, OUTPUT);
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(GREEN_LED_PIN, LOW);
-  
+
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
-  
+
   deviceMAC = WiFi.macAddress();
   Serial.println("Device MAC: " + deviceMAC);
-  
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  
+
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  
+
   discoveryStartTime = millis();
   if (listenForDiscovery(DISCOVERY_TIMEOUT)) {
     connectToWebSocket();
   } else {
     Serial.println("No master found, will keep trying");
   }
-  
+
   Serial.println("Setup complete");
 }
 
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-  switch(type) {
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
     case WStype_DISCONNECTED:
       Serial.println("Disconnected from WebSocket server");
-      
+
       if (!sensorError) {
         digitalWrite(RED_LED_PIN, LOW);
         digitalWrite(GREEN_LED_PIN, LOW);
-        
+
         digitalWrite(RED_LED_PIN, HIGH);
         delay(100);
         digitalWrite(RED_LED_PIN, LOW);
@@ -197,11 +196,11 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         Serial.println("Starting disconnection timer");
       }
       break;
-      
+
     case WStype_CONNECTED:
       {
         Serial.println("Connected to WebSocket server");
-        
+
         disconnectionStartTime = 0;
 
         if (!sensorError) {
@@ -213,46 +212,83 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
           delay(100);
           digitalWrite(GREEN_LED_PIN, LOW);
         }
-        
+
         DynamicJsonDocument regDoc(256);
         regDoc["type"] = "register";
         regDoc["mac"] = deviceMAC;
         regDoc["currentId"] = deviceID;
-        
+
         String regJson;
         serializeJson(regDoc, regJson);
         webSocket.sendTXT(regJson);
         Serial.println("Sent registration request with MAC: " + deviceMAC);
       }
       break;
-      
+
     case WStype_TEXT:
       {
         Serial.printf("Received text: %s\n", payload);
-        
+
         DynamicJsonDocument doc(256);
         DeserializationError error = deserializeJson(doc, payload);
-        
+
         if (error) {
           Serial.print("deserializeJson() failed: ");
           Serial.println(error.c_str());
           return;
         }
-        
+
         if (doc.containsKey("type") && strcmp(doc["type"], "id_assigned") == 0) {
           int newId = doc["assigned_id"];
           deviceID = newId;
           Serial.printf("Master assigned ID: %d to this device\n", deviceID);
-          
+
           sendDistanceReading();
           return;
         }
-        
+
+        if (doc.containsKey("type") && strcmp(doc["type"], "id_update") == 0) {
+          String macAddress = doc["mac"];
+          int oldId = doc["old_id"];
+          int newId = doc["new_id"];
+
+          if (macAddress == deviceMAC) {
+            if (deviceID == oldId) {
+              Serial.printf("Received ID update notification: ID changed from %d to %d\n", oldId, newId);
+              deviceID = newId;
+
+              DynamicJsonDocument confirmDoc(256);
+              confirmDoc["type"] = "id_update_confirm";
+              confirmDoc["old_id"] = oldId;
+              confirmDoc["new_id"] = newId;
+              confirmDoc["mac"] = deviceMAC;
+
+              String confirmJson;
+              serializeJson(confirmDoc, confirmJson);
+              webSocket.sendTXT(confirmJson);
+
+              if (!sensorError) {
+                for (int i = 0; i < 2; i++) {
+                  digitalWrite(GREEN_LED_PIN, HIGH);
+                  digitalWrite(RED_LED_PIN, HIGH);
+                  delay(100);
+                  digitalWrite(GREEN_LED_PIN, LOW);
+                  digitalWrite(RED_LED_PIN, LOW);
+                  delay(100);
+                }
+              }
+
+              sendDistanceReading();
+            }
+          }
+          return;
+        }
+
         if (doc.containsKey("id")) {
           int receivedId = doc["id"];
           if (receivedId == deviceID) {
             String ledStatus = doc["led"];
-            
+
             if (!sensorError) {
               if (ledStatus == "red") {
                 digitalWrite(RED_LED_PIN, HIGH);
@@ -281,33 +317,33 @@ const unsigned long ERROR_FLASH_INTERVAL = 300;
 int readDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
-  
+
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  
+
   duration = pulseIn(ECHO_PIN, HIGH, 23000);
-  
+
   if (duration == 0) {
     Serial.println("WARNING: No echo received from ultrasonic sensor - possible hardware error");
     sensorErrorCount++;
-    
+
     if (sensorErrorCount >= MAX_SENSOR_ERROR_COUNT) {
       sensorError = true;
     }
-    
+
     return -1;
   }
-  
+
   sensorErrorCount = 0;
   sensorError = false;
-  
+
   int calculatedDistance = duration * 0.034 / 2;
-  
+
   if (calculatedDistance > 200) {
     calculatedDistance = 200;
   }
-  
+
   return calculatedDistance;
 }
 
@@ -317,33 +353,33 @@ void sendDistanceReading() {
       Serial.println("No valid device ID assigned yet. Cannot send reading.");
       return;
     }
-    
+
     distance = readDistance();
-    
+
     if (distance == -1) {
       Serial.println("ERROR: Failed to get valid distance reading");
-      
+
       DynamicJsonDocument doc(256);
       doc["id"] = deviceID;
       doc["mac"] = deviceMAC;
       doc["distance"] = -1;
       doc["error"] = "sensor_error";
-      
+
       String jsonString;
       serializeJson(doc, jsonString);
       webSocket.sendTXT(jsonString);
-      
+
       Serial.println("Sent sensor error notification to master");
     } else {
       DynamicJsonDocument doc(256);
       doc["id"] = deviceID;
       doc["mac"] = deviceMAC;
       doc["distance"] = distance;
-      
+
       String jsonString;
       serializeJson(doc, jsonString);
       webSocket.sendTXT(jsonString);
-      
+
       Serial.print("Sent distance reading: ");
       Serial.print(distance);
       Serial.println(" cm");
@@ -361,22 +397,22 @@ const unsigned long MAX_DISCONNECTION_TIME = 10000;
 
 void loop() {
   unsigned long currentTime = millis();
-  
+
   if (sensorError) {
     if (currentTime - lastSensorErrorFlash >= ERROR_FLASH_INTERVAL) {
       static bool redLedState = false;
       redLedState = !redLedState;
       digitalWrite(RED_LED_PIN, redLedState ? HIGH : LOW);
-      
+
       digitalWrite(GREEN_LED_PIN, LOW);
-      
+
       lastSensorErrorFlash = currentTime;
     }
   }
-  
+
   if (masterDiscovered) {
     webSocket.loop();
-    
+
     bool isConnected = webSocket.isConnected();
     if (isConnected != wasConnected) {
       if (isConnected) {
@@ -391,15 +427,14 @@ void loop() {
       }
       wasConnected = isConnected;
     }
-    
-    if (!isConnected && disconnectionStartTime > 0 && 
-        (currentTime - disconnectionStartTime >= MAX_DISCONNECTION_TIME)) {
+
+    if (!isConnected && disconnectionStartTime > 0 && (currentTime - disconnectionStartTime >= MAX_DISCONNECTION_TIME)) {
       Serial.println("Disconnected for too long (10 seconds). Going back to discovery mode");
-      
+
       masterDiscovered = false;
       masterIP = "";
       disconnectionStartTime = 0;
-      
+
       if (!sensorError) {
         for (int i = 0; i < 3; i++) {
           digitalWrite(RED_LED_PIN, HIGH);
@@ -410,7 +445,7 @@ void loop() {
           delay(100);
         }
       }
-      
+
       lastDiscoveryCheck = currentTime - DISCOVERY_CHECK_INTERVAL;
     }
 
@@ -424,20 +459,19 @@ void loop() {
         digitalWrite(GREEN_LED_PIN, LOW);
       }
     }
-    
+
     if (isConnected && (currentTime - lastReadingTime >= READ_INTERVAL)) {
       sendDistanceReading();
       lastReadingTime = currentTime;
     }
-  } 
-  else if (currentTime - lastDiscoveryCheck >= DISCOVERY_CHECK_INTERVAL) {
+  } else if (currentTime - lastDiscoveryCheck >= DISCOVERY_CHECK_INTERVAL) {
     Serial.println("Looking for master discovery broadcast...");
     lastDiscoveryCheck = currentTime;
-    
+
     if (listenForDiscovery(500)) {
       connectToWebSocket();
     }
   }
-  
+
   delay(10);
 }
