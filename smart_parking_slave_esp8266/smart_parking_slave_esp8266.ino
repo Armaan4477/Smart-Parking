@@ -33,6 +33,10 @@ int distance;
 unsigned long lastReadingTime = 0;
 const unsigned long READ_INTERVAL = 2000;
 
+bool wasConnected = false;
+unsigned long disconnectionStartTime = 0;
+bool sensorError = false;
+
 bool listenForDiscovery(unsigned long timeout) {
   unsigned long startTime = millis();
   Serial.println("Listening for master discovery broadcast...");
@@ -179,7 +183,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     case WStype_DISCONNECTED:
       Serial.println("Disconnected from WebSocket server");
       
-      // Only modify LEDs if there's no sensor error
       if (!sensorError) {
         digitalWrite(RED_LED_PIN, LOW);
         digitalWrite(GREEN_LED_PIN, LOW);
@@ -201,7 +204,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         
         disconnectionStartTime = 0;
 
-        // Only modify LEDs if there's no sensor error
         if (!sensorError) {
           digitalWrite(GREEN_LED_PIN, HIGH);
           delay(100);
@@ -251,7 +253,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
           if (receivedId == deviceID) {
             String ledStatus = doc["led"];
             
-            // Only change LEDs if there's no sensor error
             if (!sensorError) {
               if (ledStatus == "red") {
                 digitalWrite(RED_LED_PIN, HIGH);
@@ -272,12 +273,10 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   }
 }
 
-// Add variables for sensor error detection
-bool sensorError = false;
 const int MAX_SENSOR_ERROR_COUNT = 3;
 int sensorErrorCount = 0;
 unsigned long lastSensorErrorFlash = 0;
-const unsigned long ERROR_FLASH_INTERVAL = 300; // 300ms for error LED flashing
+const unsigned long ERROR_FLASH_INTERVAL = 300;
 
 int readDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -287,11 +286,9 @@ int readDistance() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
   
-  // Use timeout for pulseIn to detect sensor errors
-  duration = pulseIn(ECHO_PIN, HIGH, 23000); // 23ms timeout (for max range ~400cm)
+  duration = pulseIn(ECHO_PIN, HIGH, 23000);
   
   if (duration == 0) {
-    // No echo received within timeout - sensor might be disconnected or faulty
     Serial.println("WARNING: No echo received from ultrasonic sensor - possible hardware error");
     sensorErrorCount++;
     
@@ -299,10 +296,9 @@ int readDistance() {
       sensorError = true;
     }
     
-    return -1; // Error value
+    return -1;
   }
   
-  // Valid reading received, reset error counter
   sensorErrorCount = 0;
   sensorError = false;
   
@@ -324,11 +320,9 @@ void sendDistanceReading() {
     
     distance = readDistance();
     
-    // Check for sensor error
     if (distance == -1) {
       Serial.println("ERROR: Failed to get valid distance reading");
       
-      // Still send a message to the master, but with error flag
       DynamicJsonDocument doc(256);
       doc["id"] = deviceID;
       doc["mac"] = deviceMAC;
@@ -341,7 +335,6 @@ void sendDistanceReading() {
       
       Serial.println("Sent sensor error notification to master");
     } else {
-      // Normal reading, send as usual
       DynamicJsonDocument doc(256);
       doc["id"] = deviceID;
       doc["mac"] = deviceMAC;
@@ -360,10 +353,8 @@ void sendDistanceReading() {
   }
 }
 
-bool wasConnected = false;
 unsigned long lastReconnectAttempt = 0;
 unsigned long lastDiscoveryCheck = 0;
-unsigned long disconnectionStartTime = 0;
 const unsigned long RECONNECT_INTERVAL = 3000;
 const unsigned long DISCOVERY_CHECK_INTERVAL = 5000;
 const unsigned long MAX_DISCONNECTION_TIME = 10000;
@@ -371,16 +362,12 @@ const unsigned long MAX_DISCONNECTION_TIME = 10000;
 void loop() {
   unsigned long currentTime = millis();
   
-  // Handle sensor error LED flashing
   if (sensorError) {
-    // Flash the red LED when sensor error is detected
     if (currentTime - lastSensorErrorFlash >= ERROR_FLASH_INTERVAL) {
-      // Toggle the red LED state
       static bool redLedState = false;
       redLedState = !redLedState;
       digitalWrite(RED_LED_PIN, redLedState ? HIGH : LOW);
       
-      // Keep the green LED off during error state
       digitalWrite(GREEN_LED_PIN, LOW);
       
       lastSensorErrorFlash = currentTime;
@@ -413,7 +400,6 @@ void loop() {
       masterIP = "";
       disconnectionStartTime = 0;
       
-      // Only flash discovery mode indicator if we're not in sensor error state
       if (!sensorError) {
         for (int i = 0; i < 3; i++) {
           digitalWrite(RED_LED_PIN, HIGH);
@@ -432,7 +418,6 @@ void loop() {
       Serial.println("Attempting to reconnect...");
       lastReconnectAttempt = currentTime;
 
-      // Only flash reconnection indicator if we're not in sensor error state
       if (!sensorError) {
         digitalWrite(GREEN_LED_PIN, HIGH);
         delay(50);

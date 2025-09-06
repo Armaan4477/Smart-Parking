@@ -31,11 +31,10 @@ unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
-// Variables for tracking slave connectivity
-const unsigned long OFFLINE_DETECTION_WINDOW = 10000; // 10 second window to detect multiple disconnections
-unsigned long firstOfflineTime = 0; // When the first slave went offline in current window
-int offlineCount = 0; // Number of slaves that went offline in current window
-bool wifiDisconnectionDetected = false; // Flag to track if a WiFi disconnection event was detected
+const unsigned long OFFLINE_DETECTION_WINDOW = 10000;
+unsigned long firstOfflineTime = 0;
+int offlineCount = 0;
+bool wifiDisconnectionDetected = false;
 
 struct ParkingSpot {
   int id;
@@ -43,7 +42,7 @@ struct ParkingSpot {
   int distance;
   bool isOccupied;
   unsigned long lastUpdate;
-  bool hasSensorError = false; // Flag to track ultrasonic sensor errors
+  bool hasSensorError = false;
 };
 
 const int MAX_SPOTS = 10;
@@ -197,6 +196,10 @@ const char mainPage[] PROGMEM = R"html(
       background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
     }
     
+    .error-stat {
+      background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+    }
+    
     .button {
       border: none;
       border-radius: 6px;
@@ -329,6 +332,10 @@ const char mainPage[] PROGMEM = R"html(
       background: linear-gradient(135deg, #f39c12, #d35400);
     }
     
+    .spot-error .spot-header {
+      background: linear-gradient(135deg, #9b59b6, #8e44ad);
+    }
+    
     .spot-body {
       background-color: white;
       padding: 12px;
@@ -417,6 +424,11 @@ const char mainPage[] PROGMEM = R"html(
     .status-offline .status-indicator {
       background-color: var(--warning);
       box-shadow: 0 0 0 2px rgba(243, 156, 18, 0.2);
+    }
+    
+    .status-error .status-indicator {
+      background-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(155, 89, 182, 0.2);
     }
     
     .device-buttons button {
@@ -580,6 +592,11 @@ const char mainPage[] PROGMEM = R"html(
         <div class="stat-value" id="occupiedSpots">0</div>
         <div class="stat-label">Occupied</div>
       </div>
+      
+      <div class="stat-card error-stat">
+        <div class="stat-value" id="errorSpots">0</div>
+        <div class="stat-label">Sensor Errors</div>
+      </div>
     </div>
     
     <!-- Discovery Section -->
@@ -611,7 +628,6 @@ const char mainPage[] PROGMEM = R"html(
         </div>
         
         <div id="deviceList" class="device-list">
-          <!-- Devices will be loaded here -->
         </div>
         
         <div id="deviceEditor" class="device-editor">
@@ -643,14 +659,12 @@ const char mainPage[] PROGMEM = R"html(
       </div>
     </div>
     
-    <!-- Parking Status Grid -->
     <div class="card">
       <div class="card-header">
         <h2>Parking Status</h2>
       </div>
       <div class="card-body">
         <div id="statusGrid" class="parking-grid">
-          <!-- Parking spots will be loaded here -->
         </div>
       </div>
     </div>
@@ -665,7 +679,6 @@ const char mainPage[] PROGMEM = R"html(
     var lastParkingState = {};
     
     function showNotification(message, type = 'success') {
-      // Create notification element if it doesn't exist
       let notificationContainer = document.getElementById('notificationContainer');
       if (!notificationContainer) {
         notificationContainer = document.createElement('div');
@@ -680,7 +693,6 @@ const char mainPage[] PROGMEM = R"html(
         document.body.appendChild(notificationContainer);
       }
       
-      // Create notification
       const notification = document.createElement('div');
       notification.style = `
         background-color: ${type === 'success' ? '#2ecc71' : type === 'error' ? '#e74c3c' : '#f39c12'};
@@ -699,7 +711,6 @@ const char mainPage[] PROGMEM = R"html(
       
       notificationContainer.appendChild(notification);
       
-      // Remove notification after 3 seconds
       setTimeout(() => {
         notification.style.animation = 'fadeOut 0.3s forwards';
         setTimeout(() => {
@@ -814,6 +825,7 @@ const char mainPage[] PROGMEM = R"html(
       
       let availableCount = 0;
       let occupiedCount = 0;
+      let errorCount = 0;
       
       console.log("Received parking data:", data);
       
@@ -822,7 +834,6 @@ const char mainPage[] PROGMEM = R"html(
         return;
       }
       
-      // Track changes for animations
       const changedSpots = [];
       
       data.spots.forEach(spot => {
@@ -835,15 +846,15 @@ const char mainPage[] PROGMEM = R"html(
         const timeSinceUpdate = currentServerTime - (spot.lastUpdate || 0);
         const isOffline = currentServerTime > 0 && timeSinceUpdate > 10000;
         
-        // Check if status changed for animation
         const previousSpot = lastParkingState[spotId];
         const statusChanged = previousSpot && 
           (previousSpot.isOffline !== isOffline || 
-           (!isOffline && previousSpot.isOccupied !== spot.isOccupied));
+           previousSpot.hasSensorError !== !!spot.sensorError ||
+           (!isOffline && !spot.sensorError && previousSpot.isOccupied !== spot.isOccupied));
         
-        // Update our state tracking
         lastParkingState[spotId] = { 
-          isOffline: isOffline, 
+          isOffline: isOffline,
+          hasSensorError: !!spot.sensorError,
           isOccupied: !!spot.isOccupied 
         };
         
@@ -857,6 +868,10 @@ const char mainPage[] PROGMEM = R"html(
         if (isOffline) {
           spotClass = 'parking-spot spot-offline';
           spotStatus = 'Offline';
+        } else if (spot.sensorError) {
+          spotClass = 'parking-spot spot-error';
+          spotStatus = 'Sensor Error';
+          errorCount++;
         } else if (spot.isOccupied) {
           spotClass = 'parking-spot spot-occupied';
           spotStatus = 'Occupied';
@@ -879,6 +894,7 @@ const char mainPage[] PROGMEM = R"html(
               <div class="spot-id">Spot ${spotId}</div>
               <div class="spot-status">
                 ${isOffline ? 'Last seen: ' + formatTimeSince(timeSinceUpdate) + ' ago' : 
+                  spot.sensorError ? 'Sensor Error: Check hardware' : 
                   'Distance: ' + distanceText}
               </div>
             </div>
@@ -889,7 +905,6 @@ const char mainPage[] PROGMEM = R"html(
       // Update the grid
       statusGrid.innerHTML = newHtml;
       
-      // Apply animations to changed spots
       setTimeout(() => {
         changedSpots.forEach(id => {
           const spotElement = document.getElementById(`spot-${id}`);
@@ -904,10 +919,10 @@ const char mainPage[] PROGMEM = R"html(
         });
       }, 50);
       
-      // Update stat counters with animation
       animateCounter('totalSpots', data.spots.length);
       animateCounter('availableSpots', availableCount);
       animateCounter('occupiedSpots', occupiedCount);
+      animateCounter('errorSpots', errorCount);
       
       updateDeviceManagement(data.spots, data.serverTime);
     }
@@ -959,9 +974,9 @@ const char mainPage[] PROGMEM = R"html(
             <div class="device-info">
               <span class="device-id">ID ${device.id}</span>
               <span class="device-mac">${deviceMac}</span>
-              <span class="device-status ${isOffline ? 'status-offline' : 'status-online'}">
+              <span class="device-status ${isOffline ? 'status-offline' : device.sensorError ? 'status-error' : 'status-online'}">
                 <span class="status-indicator"></span>
-                ${isOffline ? 'Offline' : 'Online'}
+                ${isOffline ? 'Offline' : device.sensorError ? 'Sensor Error' : 'Online'}
               </span>
             </div>
             <div class="device-buttons">
@@ -1225,11 +1240,9 @@ void broadcastParkingStatus() {
 bool checkWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi connection lost! Attempting to reconnect...");
-    
-    // Try to reconnect
+
     WiFi.reconnect();
     
-    // Wait a bit for connection
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
       delay(100);
@@ -1246,7 +1259,7 @@ bool checkWiFiConnection() {
       return false;
     }
   }
-  return true; // WiFi is already connected
+  return true;
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
@@ -1475,7 +1488,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           String macAddress = doc["mac"].as<String>();
           bool hasSensorError = false;
           
-          // Check if the sensor error flag is present
           if (doc.containsKey("error") && strcmp(doc["error"], "sensor_error") == 0) {
             hasSensorError = true;
             Serial.printf("Sensor error reported by device ID %d (MAC: %s)\n", id, macAddress.c_str());
@@ -1494,18 +1506,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
               parkingSpots[spotIndex].macAddress = macAddress;
             }
             
-            // Store sensor error and distance data
             parkingSpots[spotIndex].distance = distance;
             
-            // Only update occupation status if there's no sensor error
             if (!hasSensorError) {
               parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
             }
             
-            // Always update the last update time
             parkingSpots[spotIndex].lastUpdate = millis();
             
-            // Store the sensor error status in a new field
             parkingSpots[spotIndex].hasSensorError = hasSensorError;
 
             DynamicJsonDocument response(128);
@@ -1569,30 +1577,25 @@ void syncTaskFunction(void* parameter) {
       }
     }
 
-    // Check for slave connectivity every SYNC_INTERVAL
     if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
       Serial.println("Syncing parking status...");
       
-      // Count active and offline slaves
       int activeSpots = 0;
       int offlineSpots = 0;
       int recentlyOfflineSpots = 0;
       
-      // Get current time to check for timeout
       for (int i = 0; i < connectedSpots; i++) {
         unsigned long timeSinceUpdate = currentTime - parkingSpots[i].lastUpdate;
         
-        if (timeSinceUpdate <= 10000) { // Within 10 seconds is considered active
+        if (timeSinceUpdate <= 10000) {
           activeSpots++;
         } else {
           offlineSpots++;
           
-          // Check if this spot recently went offline (within our detection window)
-          if (parkingSpots[i].lastUpdate > 0 && // Has connected before
+          if (parkingSpots[i].lastUpdate > 0 &&
               parkingSpots[i].lastUpdate > currentTime - OFFLINE_DETECTION_WINDOW) {
             recentlyOfflineSpots++;
             
-            // Record the first offline event in this window
             if (firstOfflineTime == 0) {
               firstOfflineTime = currentTime;
               offlineCount = 1;
@@ -1606,27 +1609,22 @@ void syncTaskFunction(void* parameter) {
       Serial.printf("Active spots: %d, Offline spots: %d, Recently offline: %d\n", 
                     activeSpots, offlineSpots, recentlyOfflineSpots);
       
-      // Reset window if it expired
       if (firstOfflineTime > 0 && currentTime - firstOfflineTime > OFFLINE_DETECTION_WINDOW) {
         Serial.println("Resetting offline detection window");
         firstOfflineTime = 0;
         offlineCount = 0;
       }
       
-      // Check if half or more slaves went offline in our window
       int previousTotal = previousActiveSpots;
       if (previousTotal > 0 && offlineCount > 0) {
-        // Calculate percentage of slaves that went offline
         float offlinePercentage = (float)offlineCount / previousTotal;
         
         Serial.printf("Offline percentage: %.1f%% (%d out of previous %d)\n", 
                     offlinePercentage * 100, offlineCount, previousTotal);
                     
-        // If 50% or more went offline in our time window
         if (offlinePercentage >= 0.5 && !discoveryMode) {
           Serial.println("ALERT: Multiple slaves went offline! Checking WiFi connection...");
           
-          // Check WiFi connection
           bool wifiOK = checkWiFiConnection();
           
           if (!wifiOK) {
@@ -1636,7 +1634,6 @@ void syncTaskFunction(void* parameter) {
             Serial.println("WiFi connection is OK, but slaves are offline. Starting discovery mode...");
           }
           
-          // Start discovery mode regardless
           discoveryMode = true;
           discoveryStartTime = currentTime;
           lastDiscoveryTime = 0;
@@ -1654,16 +1651,13 @@ void syncTaskFunction(void* parameter) {
           serializeJson(responseDoc, responseJson);
           webSocket.broadcastTXT(responseJson);
           
-          // Reset tracking
           firstOfflineTime = 0;
           offlineCount = 0;
         }
       }
       
-      // Update our record of active spots for next comparison
       previousActiveSpots = activeSpots;
       
-      // Broadcast parking status to all connected clients
       broadcastParkingStatus();
       lastSyncTime = currentTime;
     }
@@ -1672,14 +1666,13 @@ void syncTaskFunction(void* parameter) {
   }
 }
 
-// WiFi event handler
 void WiFiEventHandler(WiFiEvent_t event) {
   switch (event) {
-    case SYSTEM_EVENT_STA_DISCONNECTED:
+    case WIFI_EVENT_STA_DISCONNECTED:
       Serial.println("WiFi lost connection");
       wifiDisconnectionDetected = true;
       break;
-    case SYSTEM_EVENT_STA_GOT_IP:
+    case IP_EVENT_STA_GOT_IP:
       Serial.println("WiFi connected with IP: ");
       Serial.println(WiFi.localIP());
       wifiDisconnectionDetected = false;
@@ -1699,7 +1692,6 @@ void setup() {
 
   preferences.begin("smartpark", false);
   
-  // Register WiFi event handler
   WiFi.onEvent(WiFiEventHandler);
 
   WiFi.begin(ssid, password);
@@ -1820,8 +1812,7 @@ void loop() {
     physicalOverrideActive = false;
   }
   
-  // Periodically check WiFi if it was previously disconnected
-  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) { // Check every 30 seconds
+  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
     Serial.println("Periodic WiFi connection check...");
     if (checkWiFiConnection()) {
       wifiDisconnectionDetected = false;
