@@ -1185,7 +1185,7 @@ void loadDeviceMappings() {
         parkingSpots[connectedSpots].macAddress = storedMac;
         parkingSpots[connectedSpots].distance = 0;
         parkingSpots[connectedSpots].isOccupied = false;
-        parkingSpots[connectedSpots].lastUpdate = 0;
+        parkingSpots[connectedSpots].lastUpdate = millis() - 20000;
         parkingSpots[connectedSpots].hasSensorError = false;
         connectedSpots++;
 
