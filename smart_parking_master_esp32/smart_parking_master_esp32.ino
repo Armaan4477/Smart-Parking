@@ -31,12 +31,19 @@ unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
+// Variables for tracking slave connectivity
+const unsigned long OFFLINE_DETECTION_WINDOW = 10000; // 10 second window to detect multiple disconnections
+unsigned long firstOfflineTime = 0; // When the first slave went offline in current window
+int offlineCount = 0; // Number of slaves that went offline in current window
+bool wifiDisconnectionDetected = false; // Flag to track if a WiFi disconnection event was detected
+
 struct ParkingSpot {
   int id;
   String macAddress;
   int distance;
   bool isOccupied;
   unsigned long lastUpdate;
+  bool hasSensorError = false; // Flag to track ultrasonic sensor errors
 };
 
 const int MAX_SPOTS = 10;
@@ -1207,11 +1214,39 @@ void broadcastParkingStatus() {
     spot["distance"] = parkingSpots[i].distance;
     spot["isOccupied"] = parkingSpots[i].isOccupied;
     spot["lastUpdate"] = parkingSpots[i].lastUpdate;
+    spot["sensorError"] = parkingSpots[i].hasSensorError;
   }
 
   String jsonString;
   serializeJson(doc, jsonString);
   webSocket.broadcastTXT(jsonString);
+}
+
+bool checkWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi connection lost! Attempting to reconnect...");
+    
+    // Try to reconnect
+    WiFi.reconnect();
+    
+    // Wait a bit for connection
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(100);
+      attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi reconnected successfully");
+      Serial.print("IP address: ");
+      Serial.println(WiFi.localIP());
+      return true;
+    } else {
+      Serial.println("Failed to reconnect to WiFi");
+      return false;
+    }
+  }
+  return true; // WiFi is already connected
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
@@ -1438,6 +1473,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           int id = doc["id"];
           int distance = doc["distance"];
           String macAddress = doc["mac"].as<String>();
+          bool hasSensorError = false;
+          
+          // Check if the sensor error flag is present
+          if (doc.containsKey("error") && strcmp(doc["error"], "sensor_error") == 0) {
+            hasSensorError = true;
+            Serial.printf("Sensor error reported by device ID %d (MAC: %s)\n", id, macAddress.c_str());
+          }
 
           int spotIndex = findParkingSpotById(id);
           if (spotIndex == -1 && connectedSpots < MAX_SPOTS) {
@@ -1451,9 +1493,20 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             if (macAddress.length() > 0) {
               parkingSpots[spotIndex].macAddress = macAddress;
             }
+            
+            // Store sensor error and distance data
             parkingSpots[spotIndex].distance = distance;
-            parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+            
+            // Only update occupation status if there's no sensor error
+            if (!hasSensorError) {
+              parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+            }
+            
+            // Always update the last update time
             parkingSpots[spotIndex].lastUpdate = millis();
+            
+            // Store the sensor error status in a new field
+            parkingSpots[spotIndex].hasSensorError = hasSensorError;
 
             DynamicJsonDocument response(128);
             response["id"] = id;
@@ -1488,6 +1541,8 @@ void webUITaskFunction(void* parameter) {
 void syncTaskFunction(void* parameter) {
   unsigned long lastSyncTime = 0;
   unsigned long lastDiscoveryTime = 0;
+  unsigned long lastConnectivityCheck = 0;
+  int previousActiveSpots = 0;
 
   for (;;) {
     unsigned long currentTime = millis();
@@ -1514,13 +1569,123 @@ void syncTaskFunction(void* parameter) {
       }
     }
 
+    // Check for slave connectivity every SYNC_INTERVAL
     if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
       Serial.println("Syncing parking status...");
+      
+      // Count active and offline slaves
+      int activeSpots = 0;
+      int offlineSpots = 0;
+      int recentlyOfflineSpots = 0;
+      
+      // Get current time to check for timeout
+      for (int i = 0; i < connectedSpots; i++) {
+        unsigned long timeSinceUpdate = currentTime - parkingSpots[i].lastUpdate;
+        
+        if (timeSinceUpdate <= 10000) { // Within 10 seconds is considered active
+          activeSpots++;
+        } else {
+          offlineSpots++;
+          
+          // Check if this spot recently went offline (within our detection window)
+          if (parkingSpots[i].lastUpdate > 0 && // Has connected before
+              parkingSpots[i].lastUpdate > currentTime - OFFLINE_DETECTION_WINDOW) {
+            recentlyOfflineSpots++;
+            
+            // Record the first offline event in this window
+            if (firstOfflineTime == 0) {
+              firstOfflineTime = currentTime;
+              offlineCount = 1;
+            } else {
+              offlineCount++;
+            }
+          }
+        }
+      }
+      
+      Serial.printf("Active spots: %d, Offline spots: %d, Recently offline: %d\n", 
+                    activeSpots, offlineSpots, recentlyOfflineSpots);
+      
+      // Reset window if it expired
+      if (firstOfflineTime > 0 && currentTime - firstOfflineTime > OFFLINE_DETECTION_WINDOW) {
+        Serial.println("Resetting offline detection window");
+        firstOfflineTime = 0;
+        offlineCount = 0;
+      }
+      
+      // Check if half or more slaves went offline in our window
+      int previousTotal = previousActiveSpots;
+      if (previousTotal > 0 && offlineCount > 0) {
+        // Calculate percentage of slaves that went offline
+        float offlinePercentage = (float)offlineCount / previousTotal;
+        
+        Serial.printf("Offline percentage: %.1f%% (%d out of previous %d)\n", 
+                    offlinePercentage * 100, offlineCount, previousTotal);
+                    
+        // If 50% or more went offline in our time window
+        if (offlinePercentage >= 0.5 && !discoveryMode) {
+          Serial.println("ALERT: Multiple slaves went offline! Checking WiFi connection...");
+          
+          // Check WiFi connection
+          bool wifiOK = checkWiFiConnection();
+          
+          if (!wifiOK) {
+            Serial.println("WiFi connection issue detected! Starting discovery mode...");
+            wifiDisconnectionDetected = true;
+          } else {
+            Serial.println("WiFi connection is OK, but slaves are offline. Starting discovery mode...");
+          }
+          
+          // Start discovery mode regardless
+          discoveryMode = true;
+          discoveryStartTime = currentTime;
+          lastDiscoveryTime = 0;
+          digitalWrite(DISCOVERY_LED_PIN, HIGH);
+          
+          DynamicJsonDocument responseDoc(256);
+          responseDoc["type"] = "discovery_status";
+          responseDoc["active"] = true;
+          responseDoc["physical_override"] = false;
+          responseDoc["message"] = wifiOK ? 
+              "Discovery mode activated due to multiple slaves offline" :
+              "Discovery mode activated due to WiFi connection issue";
+              
+          String responseJson;
+          serializeJson(responseDoc, responseJson);
+          webSocket.broadcastTXT(responseJson);
+          
+          // Reset tracking
+          firstOfflineTime = 0;
+          offlineCount = 0;
+        }
+      }
+      
+      // Update our record of active spots for next comparison
+      previousActiveSpots = activeSpots;
+      
+      // Broadcast parking status to all connected clients
       broadcastParkingStatus();
       lastSyncTime = currentTime;
     }
 
     delay(100);
+  }
+}
+
+// WiFi event handler
+void WiFiEventHandler(WiFiEvent_t event) {
+  switch (event) {
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      Serial.println("WiFi lost connection");
+      wifiDisconnectionDetected = true;
+      break;
+    case SYSTEM_EVENT_STA_GOT_IP:
+      Serial.println("WiFi connected with IP: ");
+      Serial.println(WiFi.localIP());
+      wifiDisconnectionDetected = false;
+      break;
+    default:
+      break;
   }
 }
 
@@ -1533,6 +1698,9 @@ void setup() {
   digitalWrite(DISCOVERY_LED_PIN, LOW);
 
   preferences.begin("smartpark", false);
+  
+  // Register WiFi event handler
+  WiFi.onEvent(WiFiEventHandler);
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -1639,6 +1807,7 @@ void checkDiscoveryButton() {
 
 void loop() {
   unsigned long currentTime = millis();
+  static unsigned long lastWiFiCheck = 0;
 
   checkDiscoveryButton();
 
@@ -1649,6 +1818,16 @@ void loop() {
     discoveryMode = true;
   } else {
     physicalOverrideActive = false;
+  }
+  
+  // Periodically check WiFi if it was previously disconnected
+  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) { // Check every 30 seconds
+    Serial.println("Periodic WiFi connection check...");
+    if (checkWiFiConnection()) {
+      wifiDisconnectionDetected = false;
+      Serial.println("WiFi connection restored");
+    }
+    lastWiFiCheck = currentTime;
   }
 
   if (discoveryMode) {
