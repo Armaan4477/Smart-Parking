@@ -702,12 +702,27 @@ const char mainPage[] PROGMEM = R"html(
         border-radius: 8px;
         box-shadow: 0 3px 10px rgba(0,0,0,0.1);
         font-size: 14px;
-        font-weight: 500;
+        font-weight: ${type === 'error' ? '600' : '500'};
         animation: slideIn 0.3s, fadeOut 0.3s 2.7s;
         opacity: 0;
+        border-left: 4px solid ${type === 'success' ? '#27ae60' : type === 'error' ? '#c0392b' : '#e67e22'};
+        display: flex;
+        align-items: center;
       `;
       notification.style.animation = 'slideIn 0.3s forwards';
-      notification.textContent = message;
+      const icon = document.createElement('div');
+      icon.style = `
+        margin-right: 10px;
+        font-size: 18px;
+        font-weight: bold;
+      `;
+      icon.innerHTML = type === 'success' ? '✓' : type === 'error' ? '✗' : '⚠';
+      
+      const textSpan = document.createElement('span');
+      textSpan.textContent = message;
+      
+      notification.appendChild(icon);
+      notification.appendChild(textSpan);
       
       notificationContainer.appendChild(notification);
       
@@ -739,6 +754,9 @@ const char mainPage[] PROGMEM = R"html(
         } else if (data.type === 'error') {
           showNotification(data.message, 'error');
           console.error('Error:', data.message);
+        } else if (data.type === 'notification') {
+          showNotification(data.message, data.notificationType || 'info');
+          console.log('Notification:', data.message);
         } else {
           console.log('Received other message:', data);
         }
@@ -860,6 +878,18 @@ const char mainPage[] PROGMEM = R"html(
         
         if (statusChanged) {
           changedSpots.push(spotId);
+          
+          if (previousSpot) {
+            if (!previousSpot.isOffline && isOffline) {
+              showNotification(`Spot ${spotId} went offline`, 'warning');
+            } else if (previousSpot.isOffline && !isOffline) {
+              showNotification(`Spot ${spotId} is back online`, 'success');
+            } else if (!previousSpot.hasSensorError && spot.sensorError) {
+              showNotification(`Sensor error detected on Spot ${spotId}`, 'error');
+            } else if (previousSpot.hasSensorError && !spot.sensorError) {
+              showNotification(`Sensor on Spot ${spotId} is working again`, 'success');
+            }
+          }
         }
         
         let spotClass = '';
@@ -1242,13 +1272,13 @@ bool checkWiFiConnection() {
     Serial.println("WiFi connection lost! Attempting to reconnect...");
 
     WiFi.reconnect();
-    
+
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
       delay(100);
       attempts++;
     }
-    
+
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("WiFi reconnected successfully");
       Serial.print("IP address: ");
@@ -1439,6 +1469,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           int spotIndex = findParkingSpotByMac(macAddress);
           int assignedId = -1;
 
+          bool wasOffline = false;
+          if (spotIndex != -1) {
+            unsigned long timeSinceLastUpdate = millis() - parkingSpots[spotIndex].lastUpdate;
+            if (timeSinceLastUpdate > 10000) {
+              wasOffline = true;
+            }
+          }
+
           if (spotIndex != -1) {
             assignedId = parkingSpots[spotIndex].id;
             Serial.printf("Device with MAC %s already registered with ID %d\n",
@@ -1479,6 +1517,17 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           serializeJson(response, jsonResponse);
           webSocket.sendTXT(num, jsonResponse);
 
+          if (wasOffline && assignedId > 0) {
+            DynamicJsonDocument notifyDoc(256);
+            notifyDoc["type"] = "notification";
+            notifyDoc["message"] = "Spot " + String(assignedId) + " is back online";
+            notifyDoc["notificationType"] = "success";
+
+            String notifyJson;
+            serializeJson(notifyDoc, notifyJson);
+            webSocket.broadcastTXT(notifyJson);
+          }
+
           return;
         }
 
@@ -1487,10 +1536,27 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           int distance = doc["distance"];
           String macAddress = doc["mac"].as<String>();
           bool hasSensorError = false;
-          
+
           if (doc.containsKey("error") && strcmp(doc["error"], "sensor_error") == 0) {
+            bool prevErrorState = false;
+            int spotIndex = findParkingSpotById(id);
+            if (spotIndex != -1) {
+              prevErrorState = parkingSpots[spotIndex].hasSensorError;
+            }
+
             hasSensorError = true;
             Serial.printf("Sensor error reported by device ID %d (MAC: %s)\n", id, macAddress.c_str());
+
+            if (spotIndex != -1 && !prevErrorState) {
+              DynamicJsonDocument notifyDoc(256);
+              notifyDoc["type"] = "notification";
+              notifyDoc["message"] = "Sensor error detected on spot " + String(id);
+              notifyDoc["notificationType"] = "error";
+
+              String notifyJson;
+              serializeJson(notifyDoc, notifyJson);
+              webSocket.broadcastTXT(notifyJson);
+            }
           }
 
           int spotIndex = findParkingSpotById(id);
@@ -1501,20 +1567,32 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
           if (spotIndex != -1) {
             bool wasOccupied = parkingSpots[spotIndex].isOccupied;
+            bool hadSensorError = parkingSpots[spotIndex].hasSensorError;
 
             if (macAddress.length() > 0) {
               parkingSpots[spotIndex].macAddress = macAddress;
             }
-            
+
             parkingSpots[spotIndex].distance = distance;
-            
+
             if (!hasSensorError) {
               parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
             }
-            
+
             parkingSpots[spotIndex].lastUpdate = millis();
-            
+
             parkingSpots[spotIndex].hasSensorError = hasSensorError;
+
+            if (hadSensorError && !hasSensorError) {
+              DynamicJsonDocument notifyDoc(256);
+              notifyDoc["type"] = "notification";
+              notifyDoc["message"] = "Sensor on spot " + String(id) + " is working again";
+              notifyDoc["notificationType"] = "success";
+
+              String notifyJson;
+              serializeJson(notifyDoc, notifyJson);
+              webSocket.broadcastTXT(notifyJson);
+            }
 
             DynamicJsonDocument response(128);
             response["id"] = id;
@@ -1579,23 +1657,47 @@ void syncTaskFunction(void* parameter) {
 
     if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
       Serial.println("Syncing parking status...");
-      
+
       int activeSpots = 0;
       int offlineSpots = 0;
       int recentlyOfflineSpots = 0;
-      
+
       for (int i = 0; i < connectedSpots; i++) {
         unsigned long timeSinceUpdate = currentTime - parkingSpots[i].lastUpdate;
-        
+        bool wasOffline = timeSinceUpdate > 10000;
+        bool isNowOffline = timeSinceUpdate > 10000;
+
+        static unsigned long lastOfflineCheckTime = 0;
+        static bool spotOfflineStatus[MAX_SPOTS] = { false };
+
+        if (currentTime - lastOfflineCheckTime >= 5000) {
+          if (!spotOfflineStatus[i] && isNowOffline) {
+            DynamicJsonDocument notifyDoc(256);
+            notifyDoc["type"] = "notification";
+            notifyDoc["message"] = "Spot " + String(parkingSpots[i].id) + " went offline";
+            notifyDoc["notificationType"] = "warning";
+
+            String notifyJson;
+            serializeJson(notifyDoc, notifyJson);
+            webSocket.broadcastTXT(notifyJson);
+
+            spotOfflineStatus[i] = true;
+          }
+
+          if (i == connectedSpots - 1) {
+            lastOfflineCheckTime = currentTime;
+          }
+        }
+
         if (timeSinceUpdate <= 10000) {
           activeSpots++;
+          spotOfflineStatus[i] = false;
         } else {
           offlineSpots++;
-          
-          if (parkingSpots[i].lastUpdate > 0 &&
-              parkingSpots[i].lastUpdate > currentTime - OFFLINE_DETECTION_WINDOW) {
+
+          if (parkingSpots[i].lastUpdate > 0 && parkingSpots[i].lastUpdate > currentTime - OFFLINE_DETECTION_WINDOW) {
             recentlyOfflineSpots++;
-            
+
             if (firstOfflineTime == 0) {
               firstOfflineTime = currentTime;
               offlineCount = 1;
@@ -1605,59 +1707,57 @@ void syncTaskFunction(void* parameter) {
           }
         }
       }
-      
-      Serial.printf("Active spots: %d, Offline spots: %d, Recently offline: %d\n", 
+
+      Serial.printf("Active spots: %d, Offline spots: %d, Recently offline: %d\n",
                     activeSpots, offlineSpots, recentlyOfflineSpots);
-      
+
       if (firstOfflineTime > 0 && currentTime - firstOfflineTime > OFFLINE_DETECTION_WINDOW) {
         Serial.println("Resetting offline detection window");
         firstOfflineTime = 0;
         offlineCount = 0;
       }
-      
+
       int previousTotal = previousActiveSpots;
       if (previousTotal > 0 && offlineCount > 0) {
         float offlinePercentage = (float)offlineCount / previousTotal;
-        
-        Serial.printf("Offline percentage: %.1f%% (%d out of previous %d)\n", 
-                    offlinePercentage * 100, offlineCount, previousTotal);
-                    
+
+        Serial.printf("Offline percentage: %.1f%% (%d out of previous %d)\n",
+                      offlinePercentage * 100, offlineCount, previousTotal);
+
         if (offlinePercentage >= 0.5 && !discoveryMode) {
           Serial.println("ALERT: Multiple slaves went offline! Checking WiFi connection...");
-          
+
           bool wifiOK = checkWiFiConnection();
-          
+
           if (!wifiOK) {
             Serial.println("WiFi connection issue detected! Starting discovery mode...");
             wifiDisconnectionDetected = true;
           } else {
             Serial.println("WiFi connection is OK, but slaves are offline. Starting discovery mode...");
           }
-          
+
           discoveryMode = true;
           discoveryStartTime = currentTime;
           lastDiscoveryTime = 0;
           digitalWrite(DISCOVERY_LED_PIN, HIGH);
-          
+
           DynamicJsonDocument responseDoc(256);
           responseDoc["type"] = "discovery_status";
           responseDoc["active"] = true;
           responseDoc["physical_override"] = false;
-          responseDoc["message"] = wifiOK ? 
-              "Discovery mode activated due to multiple slaves offline" :
-              "Discovery mode activated due to WiFi connection issue";
-              
+          responseDoc["message"] = wifiOK ? "Discovery mode activated due to multiple slaves offline" : "Discovery mode activated due to WiFi connection issue";
+
           String responseJson;
           serializeJson(responseDoc, responseJson);
           webSocket.broadcastTXT(responseJson);
-          
+
           firstOfflineTime = 0;
           offlineCount = 0;
         }
       }
-      
+
       previousActiveSpots = activeSpots;
-      
+
       broadcastParkingStatus();
       lastSyncTime = currentTime;
     }
@@ -1691,7 +1791,7 @@ void setup() {
   digitalWrite(DISCOVERY_LED_PIN, LOW);
 
   preferences.begin("smartpark", false);
-  
+
   WiFi.onEvent(WiFiEventHandler);
 
   WiFi.begin(ssid, password);
@@ -1811,7 +1911,7 @@ void loop() {
   } else {
     physicalOverrideActive = false;
   }
-  
+
   if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
     Serial.println("Periodic WiFi connection check...");
     if (checkWiFiConnection()) {
