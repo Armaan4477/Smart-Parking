@@ -1,6 +1,3 @@
-// hi this is a test
-
-
 #include <WiFi.h>
 #include <WebSocketsServer.h>
 #include <ESPAsyncWebServer.h>
