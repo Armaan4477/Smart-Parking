@@ -1,7 +1,6 @@
 .DS_Store
 
 # Firebase config files with sensitive data
-/smart-parking-web/lib/firebaseConfig.js
 /smart-parking-web/lib/serviceAccountKey.json
 
 # Dependency directories
