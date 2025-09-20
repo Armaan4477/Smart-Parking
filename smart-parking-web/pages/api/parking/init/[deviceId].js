@@ -1,0 +1,50 @@
+import db from '../../../../lib/firebaseAdmin';
+import { validateDeviceId } from '../../../../lib/apiHelpers';
+
+export default async function handler(req, res) {
+  // Only allow POST requests for initialization
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  const { deviceId } = req.query;
+
+  // Validate device ID
+  if (!validateDeviceId(deviceId)) {
+    return res.status(400).json({ success: false, error: 'Invalid device ID' });
+  }
+
+  try {
+    // Check if the device already exists
+    const snapshot = await db.ref(`SParking/Device${deviceId}`).once('value');
+    
+    if (snapshot.exists()) {
+      // Device already exists, just return the current data
+      return res.status(200).json({ 
+        success: true, 
+        message: `Device${deviceId} already initialized`,
+        data: snapshot.val()
+      });
+    }
+    
+    // Initialize device with default values
+    await db.ref(`SParking/Device${deviceId}`).set({
+      'Parking Status': 'open',
+      'Sensor Error': false,
+      'System Status': 'online'
+    });
+    
+    return res.status(201).json({ 
+      success: true, 
+      message: `Device${deviceId} initialized successfully`,
+      data: {
+        'Parking Status': 'open',
+        'Sensor Error': false,
+        'System Status': 'online'
+      }
+    });
+  } catch (error) {
+    console.error(`Error initializing device ${deviceId}:`, error);
+    return res.status(500).json({ success: false, error: 'Failed to initialize device' });
+  }
+}
