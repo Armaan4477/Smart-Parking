@@ -1,5 +1,5 @@
-import db from '../../../../lib/firebaseAdmin';
-import { validateDeviceId } from '../../../../lib/apiHelpers';
+import db from '../../../lib/firebaseAdmin';
+import { validateDeviceId } from '../../../lib/apiHelpers';
 
 export default async function handler(req, res) {
   const { deviceId } = req.query;
