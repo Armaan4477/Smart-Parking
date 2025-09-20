@@ -1,5 +1,6 @@
 import db from '../../../../lib/firebaseAdmin';
 import { validateDeviceId } from '../../../../lib/apiHelpers';
+import { logApiRequest } from '../../../../lib/database';
 
 export default async function handler(req, res) {
   // Only allow POST requests for initialization
@@ -15,6 +16,9 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Log initialization attempt
+    await logApiRequest(deviceId, `/api/parking/init/${deviceId}`, 'POST', req.body, true);
+    
     // Check if the device already exists
     const snapshot = await db.ref(`SParking/Device${deviceId}`).once('value');
     
@@ -45,6 +49,8 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error(`Error initializing device ${deviceId}:`, error);
+    await logApiRequest(deviceId, `/api/parking/init/${deviceId}`, 'POST', req.body, false, 
+      error.message);
     return res.status(500).json({ success: false, error: 'Failed to initialize device' });
   }
 }

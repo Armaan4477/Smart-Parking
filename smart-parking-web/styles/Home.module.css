@@ -3,16 +3,18 @@
   padding: 0 0.5rem;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
 }
 
 .main {
-  padding: 5rem 0;
+  padding: 3rem 0;
   flex: 1;
+  width: 100%;
+  max-width: 1200px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
 }
 
@@ -23,17 +25,218 @@
   display: flex;
   justify-content: center;
   align-items: center;
+  margin-top: 2rem;
 }
 
 .title {
   margin: 0;
   line-height: 1.15;
-  font-size: 4rem;
+  font-size: 3rem;
   text-align: center;
+  margin-bottom: 1rem;
 }
 
 .description {
   line-height: 1.5;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   text-align: center;
+  margin-bottom: 2rem;
+}
+
+.dashboard {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.parkingStatus {
+  width: 100%;
+  background-color: #f9f9f9;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.parkingStatus h2 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+}
+
+.spotsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.spotCard {
+  padding: 1rem;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.available {
+  background-color: #d4edda;
+  border: 1px solid #c3e6cb;
+}
+
+.occupied {
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+}
+
+.error {
+  border: 2px solid #e0a800;
+}
+
+.errorText {
+  color: #e0a800;
+  font-weight: bold;
+}
+
+/* API Logs Styles */
+.apiLogsContainer {
+  width: 100%;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.apiLogsHeader {
+  background-color: #343a40;
+  color: white;
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.apiLogsHeader h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.toggleButton {
+  background-color: transparent;
+  border: 1px solid white;
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.toggleButton:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.apiLogsFilters {
+  display: flex;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
+  background-color: #f1f1f1;
+}
+
+.filterButton {
+  background-color: #e9ecef;
+  border: 1px solid #ced4da;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.activeFilter {
+  background-color: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.apiLogsList {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.apiLogItem {
+  border-bottom: 1px solid #eaeaea;
+}
+
+.apiLogMain {
+  padding: 1rem 1.5rem;
+  display: grid;
+  grid-template-columns: 120px 1fr auto auto;
+  align-items: center;
+  gap: 1rem;
+  cursor: pointer;
+}
+
+.apiLogMain:hover {
+  background-color: #f1f1f1;
+}
+
+.apiLogType {
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+
+.apiLogInfo {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apiLogTime {
+  font-size: 0.75rem;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+.successBadge, .errorBadge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.successBadge {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.errorBadge {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.apiLogDetails {
+  padding: 1rem 1.5rem;
+  background-color: #f8f9fa;
+  border-top: 1px solid #eaeaea;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.apiLogDetail {
+  font-size: 0.875rem;
+}
+
+.jsonData {
+  background-color: #f1f1f1;
+  padding: 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  font-size: 0.75rem;
+}
+
+.errorLog .apiLogMain {
+  background-color: rgba(248, 215, 218, 0.2);
+}
+
+.noLogsMessage {
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: #6c757d;
 }

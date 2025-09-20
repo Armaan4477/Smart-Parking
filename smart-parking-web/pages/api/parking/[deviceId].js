@@ -1,5 +1,6 @@
 import db from '../../../lib/firebaseAdmin';
 import { validateDeviceId } from '../../../lib/apiHelpers';
+import { logApiRequest } from '../../../lib/database';
 
 export default async function handler(req, res) {
   const { deviceId } = req.query;
@@ -12,16 +13,21 @@ export default async function handler(req, res) {
   // Handle GET request (retrieve device info)
   if (req.method === 'GET') {
     try {
+      // Log incoming request
+      await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'GET', {}, true);
+      
       const snapshot = await db.ref(`SParking/Device${deviceId}`).once('value');
       const data = snapshot.val();
 
       if (!data) {
+        await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'GET', {}, false, 'Device not found');
         return res.status(404).json({ success: false, error: 'Device not found' });
       }
 
       return res.status(200).json({ success: true, data });
     } catch (error) {
       console.error(`Error getting device ${deviceId}:`, error);
+      await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'GET', {}, false, error.message);
       return res.status(500).json({ success: false, error: 'Failed to get device data' });
     }
   } 
@@ -30,11 +36,15 @@ export default async function handler(req, res) {
     try {
       const { parkingStatus, sensorError, systemStatus } = req.body;
       
+      // Log incoming request
+      await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, true);
+      
       // Build update object with only provided fields
       const updates = {};
       
       if (parkingStatus !== undefined) {
         if (!['open', 'occupied'].includes(parkingStatus)) {
+          await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, false, 'parkingStatus must be "open" or "occupied"');
           return res.status(400).json({ success: false, error: 'parkingStatus must be "open" or "occupied"' });
         }
         updates['Parking Status'] = parkingStatus;
@@ -42,6 +52,7 @@ export default async function handler(req, res) {
       
       if (sensorError !== undefined) {
         if (typeof sensorError !== 'boolean') {
+          await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, false, 'sensorError must be a boolean');
           return res.status(400).json({ success: false, error: 'sensorError must be a boolean' });
         }
         updates['Sensor Error'] = sensorError;
@@ -49,6 +60,7 @@ export default async function handler(req, res) {
       
       if (systemStatus !== undefined) {
         if (!['online', 'offline'].includes(systemStatus)) {
+          await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, false, 'systemStatus must be "online" or "offline"');
           return res.status(400).json({ success: false, error: 'systemStatus must be "online" or "offline"' });
         }
         updates['System Status'] = systemStatus;
@@ -56,6 +68,7 @@ export default async function handler(req, res) {
       
       // Check if any valid updates were provided
       if (Object.keys(updates).length === 0) {
+        await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, false, 'No valid update fields provided');
         return res.status(400).json({ 
           success: false, 
           error: 'No valid update fields provided' 
@@ -72,6 +85,7 @@ export default async function handler(req, res) {
       });
     } catch (error) {
       console.error(`Error updating device ${deviceId}:`, error);
+      await logApiRequest(deviceId, `/api/parking/${deviceId}`, 'PUT', req.body, false, error.message);
       return res.status(500).json({ success: false, error: 'Failed to update device' });
     }
   } 

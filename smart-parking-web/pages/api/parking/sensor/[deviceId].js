@@ -1,5 +1,6 @@
 import db from '../../../../lib/firebaseAdmin';
 import { validateDeviceId, parseParkingStatus } from '../../../../lib/apiHelpers';
+import { logApiRequest } from '../../../../lib/database';
 
 export default async function handler(req, res) {
   // Only allow POST requests for sensor updates
@@ -15,10 +16,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Log incoming sensor request
+    await logApiRequest(deviceId, `/api/parking/sensor/${deviceId}`, 'POST', req.body, true);
+    
     const { distance, hasSensorError } = req.body;
     
     // Validate distance value
     if (distance === undefined && hasSensorError === undefined) {
+      await logApiRequest(deviceId, `/api/parking/sensor/${deviceId}`, 'POST', req.body, false, 
+        'Either distance or hasSensorError must be provided');
       return res.status(400).json({ 
         success: false, 
         error: 'Either distance or hasSensorError must be provided' 
@@ -37,6 +43,8 @@ export default async function handler(req, res) {
       const distanceValue = parseInt(distance);
       
       if (isNaN(distanceValue)) {
+        await logApiRequest(deviceId, `/api/parking/sensor/${deviceId}`, 'POST', req.body, false, 
+          'Distance must be a number');
         return res.status(400).json({ success: false, error: 'Distance must be a number' });
       }
       
@@ -59,6 +67,8 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error(`Error updating sensor data for device ${deviceId}:`, error);
+    await logApiRequest(deviceId, `/api/parking/sensor/${deviceId}`, 'POST', req.body, false, 
+      error.message);
     return res.status(500).json({ success: false, error: 'Failed to update sensor data' });
   }
 }
