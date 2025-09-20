@@ -14,9 +14,13 @@ const char* DISCOVERY_MESSAGE = "SMART_PARKING";
 
 const int DISCOVERY_BUTTON_PIN = 32;
 const int DISCOVERY_LED_PIN = 33;
+const int ERROR_LED_PIN = 25;
 bool buttonPressed = false;
 bool lastButtonState = HIGH;
 bool physicalOverrideActive = false;
+bool systemErrorState = false;
+unsigned long lastErrorLedToggle = 0;
+const unsigned long ERROR_LED_TOGGLE_INTERVAL = 250;
 
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
@@ -1656,6 +1660,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
             hasSensorError = true;
             Serial.printf("Sensor error reported by device ID %d (MAC: %s)\n", id, macAddress.c_str());
+            
+            systemErrorState = true;
 
             if (spotIndex != -1 && !prevErrorState) {
               DynamicJsonDocument notifyDoc(256);
@@ -1702,6 +1708,18 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
               String notifyJson;
               serializeJson(notifyDoc, notifyJson);
               webSocket.broadcastTXT(notifyJson);
+              
+              bool anyErrorsLeft = false;
+              for (int i = 0; i < connectedSpots; i++) {
+                if (parkingSpots[i].hasSensorError) {
+                  anyErrorsLeft = true;
+                  break;
+                }
+              }
+              
+              if (!anyErrorsLeft && !wifiDisconnectionDetected) {
+                systemErrorState = false;
+              }
             }
 
             DynamicJsonDocument response(128);
@@ -1918,7 +1936,9 @@ void setup() {
 
   pinMode(DISCOVERY_BUTTON_PIN, INPUT_PULLUP);
   pinMode(DISCOVERY_LED_PIN, OUTPUT);
+  pinMode(ERROR_LED_PIN, OUTPUT);
   digitalWrite(DISCOVERY_LED_PIN, LOW);
+  digitalWrite(ERROR_LED_PIN, LOW);
 
   preferences.begin("smartpark", false);
 
@@ -2031,6 +2051,30 @@ void checkDiscoveryButton() {
   lastButtonState = buttonState;
 }
 
+bool checkForSystemErrors() {
+  bool hasSensorErrors = false;
+  bool hasConnectionErrors = false;
+  unsigned long currentTime = millis();
+  
+  for (int i = 0; i < connectedSpots; i++) {
+    if (parkingSpots[i].hasSensorError) {
+      hasSensorErrors = true;
+      break;
+    }
+    
+    if ((currentTime - parkingSpots[i].lastUpdate) > 15000) {
+      hasConnectionErrors = true;
+      break;
+    }
+  }
+  
+  if (wifiDisconnectionDetected) {
+    hasConnectionErrors = true;
+  }
+  
+  return hasSensorErrors || hasConnectionErrors;
+}
+
 void loop() {
   unsigned long currentTime = millis();
   static unsigned long lastWiFiCheck = 0;
@@ -2051,8 +2095,33 @@ void loop() {
     if (checkWiFiConnection()) {
       wifiDisconnectionDetected = false;
       Serial.println("WiFi connection restored");
+      
+      bool anyErrorsLeft = false;
+      for (int i = 0; i < connectedSpots; i++) {
+        if (parkingSpots[i].hasSensorError) {
+          anyErrorsLeft = true;
+          break;
+        }
+      }
+      
+      if (!anyErrorsLeft) {
+        systemErrorState = false;
+      }
     }
     lastWiFiCheck = currentTime;
+  }
+
+  systemErrorState = checkForSystemErrors();
+  
+  if (systemErrorState) {
+    if (currentTime - lastErrorLedToggle >= ERROR_LED_TOGGLE_INTERVAL) {
+      static bool errorLedState = false;
+      errorLedState = !errorLedState;
+      digitalWrite(ERROR_LED_PIN, errorLedState ? HIGH : LOW);
+      lastErrorLedToggle = currentTime;
+    }
+  } else {
+    digitalWrite(ERROR_LED_PIN, LOW);
   }
 
   if (discoveryMode) {
