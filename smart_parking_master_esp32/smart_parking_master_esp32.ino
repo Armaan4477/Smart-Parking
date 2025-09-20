@@ -4,9 +4,12 @@
 #include <ArduinoJson.h>
 #include <WiFiUdp.h>
 #include <Preferences.h>
+#include <HTTPClient.h>
 
 const char* ssid = "JoeMama";
 const char* password = "2A0R0M4AAN";
+
+const char* API_BASE_URL = "https://smart-parking-44.vercel.app";
 
 WiFiUDP udp;
 const int UDP_PORT = 4210;
@@ -28,6 +31,7 @@ AsyncWebServer server(80);
 const int DISTANCE_THRESHOLD = 45;
 const int MAX_DISTANCE = 200;
 const unsigned long SYNC_INTERVAL = 5000;
+const unsigned long API_SYNC_INTERVAL = 10000;
 
 const unsigned long DISCOVERY_DURATION = 60000;
 const unsigned long DISCOVERY_INTERVAL = 5000;
@@ -47,6 +51,7 @@ struct ParkingSpot {
   bool isOccupied;
   unsigned long lastUpdate;
   bool hasSensorError = false;
+  bool syncedWithApi = false;
 };
 
 const int MAX_SPOTS = 10;
@@ -57,6 +62,13 @@ int nextAvailableId = 1;
 Preferences preferences;
 
 unsigned long lastSyncTime = 0;
+unsigned long lastApiSyncTime = 0;
+
+void initializeSpotWithApi(int spotIndex);
+void updateSpotStatusOnApi(int spotIndex);
+void sendSensorDataToApi(int spotIndex, int distance, bool hasSensorError);
+bool makeApiRequest(String endpoint, String method, String payload = "");
+void syncWithApi();
 
 const char mainPage[] PROGMEM = R"html(
 <!DOCTYPE html>
@@ -1698,6 +1710,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             parkingSpots[spotIndex].lastUpdate = millis();
 
             parkingSpots[spotIndex].hasSensorError = hasSensorError;
+            
+            if (wasOccupied != parkingSpots[spotIndex].isOccupied || 
+                hadSensorError != parkingSpots[spotIndex].hasSensorError) {
+                  
+              if (WiFi.status() == WL_CONNECTED) {
+                sendSensorDataToApi(spotIndex, distance, hasSensorError);
+              }
+            }
 
             if (hadSensorError && !hasSensorError) {
               DynamicJsonDocument notifyDoc(256);
@@ -1988,6 +2008,12 @@ void setup() {
   }
 
   loadDeviceMappings();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    for (int i = 0; i < connectedSpots; i++) {
+      initializeSpotWithApi(i);
+    }
+  }
 
   xTaskCreatePinnedToCore(
     webUITaskFunction,
@@ -2110,6 +2136,11 @@ void loop() {
     }
     lastWiFiCheck = currentTime;
   }
+  
+  if (WiFi.status() == WL_CONNECTED && currentTime - lastApiSyncTime >= API_SYNC_INTERVAL) {
+    syncWithApi();
+    lastApiSyncTime = currentTime;
+  }
 
   systemErrorState = checkForSystemErrors();
   
@@ -2143,4 +2174,129 @@ void loop() {
   }
 
   delay(50);
+}
+
+void initializeSpotWithApi(int index) {
+  if (index < 0 || index >= connectedSpots) return;
+  
+  int spotId = parkingSpots[index].id;
+  String endpoint = "/init/" + String(spotId);
+  
+  if (makeApiRequest(endpoint, "POST")) {
+    Serial.println("Successfully initialized spot " + String(spotId) + " with API");
+    parkingSpots[index].syncedWithApi = true;
+  } else {
+    Serial.println("Failed to initialize spot " + String(spotId) + " with API");
+  }
+}
+
+void updateSpotStatusOnApi(int index) {
+  if (index < 0 || index >= connectedSpots) return;
+  
+  int spotId = parkingSpots[index].id;
+  String parkingStatus = parkingSpots[index].isOccupied ? "occupied" : "open";
+  bool hasSensorError = parkingSpots[index].hasSensorError;
+  
+  DynamicJsonDocument doc(256);
+  doc["parkingStatus"] = parkingStatus;
+  doc["sensorError"] = hasSensorError;
+  doc["systemStatus"] = "online";
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  String endpoint = "/" + String(spotId);
+  
+  if (makeApiRequest(endpoint, "PUT", payload)) {
+    Serial.println("Successfully updated spot " + String(spotId) + " status on API");
+    parkingSpots[index].syncedWithApi = true;
+  } else {
+    Serial.println("Failed to update spot " + String(spotId) + " status on API");
+  }
+}
+
+void sendSensorDataToApi(int index, int distance, bool hasSensorError) {
+  if (index < 0 || index >= connectedSpots) return;
+  
+  int spotId = parkingSpots[index].id;
+  
+  DynamicJsonDocument doc(256);
+  doc["distance"] = distance;
+  doc["hasSensorError"] = hasSensorError;
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  String endpoint = "/sensor/" + String(spotId);
+  
+  if (makeApiRequest(endpoint, "POST", payload)) {
+    Serial.println("Successfully sent sensor data for spot " + String(spotId) + " to API");
+    parkingSpots[index].syncedWithApi = true;
+  } else {
+    Serial.println("Failed to send sensor data for spot " + String(spotId) + " to API");
+  }
+}
+
+bool makeApiRequest(String endpoint, String method, String payload) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot make API request: WiFi not connected");
+    return false;
+  }
+  
+  HTTPClient http;
+  String url = String(API_BASE_URL) + "/api/parking" + endpoint;
+  
+  Serial.print("Making API request to: ");
+  Serial.println(url);
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpResponseCode;
+  
+  if (method == "GET") {
+    httpResponseCode = http.GET();
+  } else if (method == "POST") {
+    httpResponseCode = http.POST(payload);
+  } else if (method == "PUT") {
+    httpResponseCode = http.PUT(payload);
+  } else {
+    Serial.println("Unsupported HTTP method");
+    http.end();
+    return false;
+  }
+  
+  bool success = false;
+  
+  if (httpResponseCode > 0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    String response = http.getString();
+    Serial.println("Response: " + response);
+    success = (httpResponseCode == 200 || httpResponseCode == 201);
+  } else {
+    Serial.print("Error on API request: ");
+    Serial.println(httpResponseCode);
+  }
+  
+  http.end();
+  return success;
+}
+
+void syncWithApi() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  Serial.println("Syncing data with API...");
+  
+  for (int i = 0; i < connectedSpots; i++) {
+    if (!parkingSpots[i].syncedWithApi) {
+      initializeSpotWithApi(i);
+    }
+    
+    updateSpotStatusOnApi(i);
+    
+    sendSensorDataToApi(i, parkingSpots[i].distance, parkingSpots[i].hasSensorError);
+  }
+  
+  lastApiSyncTime = millis();
 }
