@@ -1,6 +1,6 @@
 import db from '../../../../lib/firebaseAdmin';
 import { validateDeviceId, parseParkingStatus } from '../../../../lib/apiHelpers';
-import { logApiRequest } from '../../../../lib/database';
+import { logApiRequest } from '../../../../lib/logHandler';
 
 export default async function handler(req, res) {
   // Only allow POST requests for sensor updates

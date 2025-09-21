@@ -1,21 +1,23 @@
 import { useState, useEffect } from 'react';
 import styles from '../styles/Home.module.css';
-import { subscribeToApiLogs } from '../lib/database';
+import { getApiLogs } from '../lib/logHandler';
 
 export default function ApiLogs() {
   const [logs, setLogs] = useState([]);
   const [selectedLog, setSelectedLog] = useState(null);
-  const [filter, setFilter] = useState('all'); // 'all', 'success', 'error'
+  const [filter, setFilter] = useState('all');
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
-    // Subscribe to real-time API logs
-    const unsubscribe = subscribeToApiLogs((newLogs) => {
-      setLogs(newLogs);
-    });
+    setLogs(getApiLogs());
     
-    // Cleanup subscription on unmount
-    return () => unsubscribe();
+    const handleLogUpdate = (event) => {
+      setLogs([...event.detail.logs]);
+    };
+    
+    window.addEventListener('apilog', handleLogUpdate);
+    
+    return () => window.removeEventListener('apilog', handleLogUpdate);
   }, []);
 
   const filteredLogs = logs.filter(log => {
@@ -54,7 +56,6 @@ export default function ApiLogs() {
 
   const renderPayloadData = (data) => {
     try {
-      // Try to parse if it's a stringified JSON
       const parsed = JSON.parse(data);
       return (
         <pre className={styles.jsonData}>
@@ -62,7 +63,6 @@ export default function ApiLogs() {
         </pre>
       );
     } catch (e) {
-      // If it's not valid JSON, just show as is
       return <span>{data || 'No data'}</span>;
     }
   };
