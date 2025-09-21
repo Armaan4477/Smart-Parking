@@ -81,8 +81,7 @@ export default function Home() {
       <main className={styles.main}>
         <div className={styles.titleContainer}>
           <img src="/ouricon.png" alt="Smart Parking Icon" className={styles.logo} />
-          <h1 className={styles.title}>
-            Welcome to Smart Parking System
+          <h1 className={styles.title}>Smart Parking System
           </h1>
         </div>
 

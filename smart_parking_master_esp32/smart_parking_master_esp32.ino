@@ -6,7 +6,7 @@
 #include <Preferences.h>
 #include <HTTPClient.h>
 
-const char* ssid = "Free Public Wi-Fi";
+const char* ssid = "JoeMama";
 const char* password = "2A0R0M4AAN";
 
 const char* API_BASE_URL = "https://smart-parking-44.vercel.app";
@@ -1174,6 +1174,7 @@ const char mainPage[] PROGMEM = R"html(
 
 TaskHandle_t WebUITask;
 TaskHandle_t SyncTask;
+TaskHandle_t ApiTask;
 
 int findParkingSpotById(int id) {
   for (int i = 0; i < connectedSpots; i++) {
@@ -1790,6 +1791,23 @@ void webUITaskFunction(void* parameter) {
   }
 }
 
+void apiTaskFunction(void* parameter) {
+  for (;;) {
+    unsigned long currentTime = millis();
+    
+    if (WiFi.status() == WL_CONNECTED && currentTime - lastApiSyncTime >= API_SYNC_INTERVAL) {
+      syncWithApi();
+      lastApiSyncTime = currentTime;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
+      sendHealthPing();
+    }
+    
+    delay(100);
+  }
+}
+
 void syncTaskFunction(void* parameter) {
   unsigned long lastSyncTime = 0;
   unsigned long lastDiscoveryTime = 0;
@@ -2051,9 +2069,17 @@ void setup() {
     &SyncTask,
     0);
     
-  if (WiFi.status() == WL_CONNECTED) {
-    sendHealthPing();
-  }
+  xTaskCreatePinnedToCore(
+    apiTaskFunction,
+    "ApiTask",
+    10000,
+    NULL,
+    1,
+    &ApiTask,
+    1);
+    
+  // Initial health ping will be handled by the API task
+  // No need to send health ping here since API task will handle it
 }
 
 void checkDiscoveryButton() {
@@ -2160,15 +2186,8 @@ void loop() {
     lastWiFiCheck = currentTime;
   }
   
-  if (WiFi.status() == WL_CONNECTED && currentTime - lastApiSyncTime >= API_SYNC_INTERVAL) {
-    syncWithApi();
-    lastApiSyncTime = currentTime;
-  }
+  // API-related tasks now handled by ApiTask on Core 1
   
-  if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
-    sendHealthPing();
-  }
-
   systemErrorState = checkForSystemErrors();
   
   if (systemErrorState) {
