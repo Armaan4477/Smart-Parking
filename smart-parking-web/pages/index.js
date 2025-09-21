@@ -130,7 +130,8 @@ export default function Home() {
                     <div 
                       key={deviceId} 
                       className={`${styles.spotCard} 
-                                ${spot['Parking Status'] === 'occupied' ? styles.occupied : styles.available} 
+                                ${spot['System Status'] === 'offline' ? styles.offline : 
+                                  spot['Parking Status'] === 'occupied' ? styles.occupied : styles.available} 
                                 ${spot['Sensor Error'] ? styles.error : ''}
                                 ${isUpdated ? styles.updated : ''}`}
                     >
@@ -139,6 +140,11 @@ export default function Home() {
                       <p>System: {spot['System Status'] || 'unknown'}</p>
                       {spot['Sensor Error'] && (
                         <p className={styles.errorText}>Sensor Error</p>
+                      )}
+                      {spot['timeSinceUpdateMs'] && spot['System Status'] === 'offline' && (
+                        <p className={styles.offlineInfo}>
+                          Last seen: {Math.floor(spot['timeSinceUpdateMs'] / 1000)} seconds ago
+                        </p>
                       )}
                       {isUpdated && <div className={styles.updateIndicator}>Updated</div>}
                     </div>

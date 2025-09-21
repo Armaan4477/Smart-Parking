@@ -24,7 +24,7 @@ bool physicalOverrideActive = false;
 bool systemErrorState = false;
 unsigned long lastErrorLedToggle = 0;
 const unsigned long ERROR_LED_TOGGLE_INTERVAL = 250;
-const unsigned long HEALTH_PING_INTERVAL = 10000;
+const unsigned long HEALTH_PING_INTERVAL = 20000;
 unsigned long lastHealthPingTime = 0;
 
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
@@ -42,6 +42,7 @@ unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
 const unsigned long OFFLINE_DETECTION_WINDOW = 10000;
+const unsigned long DEVICE_OFFLINE_TIMEOUT = 30000; // 30 seconds before considering a device offline
 unsigned long firstOfflineTime = 0;
 int offlineCount = 0;
 bool wifiDisconnectionDetected = false;
@@ -1013,10 +1014,18 @@ const char mainPage[] PROGMEM = R"html(
       spots.sort((a, b) => a.id - b.id);
       
       spots.forEach(device => {
+        // Use the isOffline flag sent by the server if available, 
+        // otherwise fallback to the old time-based calculation
         const currentServerTime = serverTime || 0;
         const timeSinceUpdate = currentServerTime - device.lastUpdate;
-        const isOffline = currentServerTime > 0 && timeSinceUpdate > 10000;
+        const isOffline = device.isOffline !== undefined 
+          ? device.isOffline 
+          : (currentServerTime > 0 && timeSinceUpdate > ${DEVICE_OFFLINE_TIMEOUT});
+        
         const deviceMac = device.mac || 'Unknown';
+        const offlineDuration = timeSinceUpdate > 60000 
+          ? Math.floor(timeSinceUpdate / 60000) + ' min' 
+          : Math.floor(timeSinceUpdate / 1000) + ' sec';
         
         newHtml += `
           <div class="device-item ${isOffline ? 'device-offline' : ''}">
@@ -1025,7 +1034,7 @@ const char mainPage[] PROGMEM = R"html(
               <span class="device-mac">${deviceMac}</span>
               <span class="device-status ${isOffline ? 'status-offline' : device.sensorError ? 'status-error' : 'status-online'}">
                 <span class="status-indicator"></span>
-                ${isOffline ? 'Offline' : device.sensorError ? 'Sensor Error' : 'Online'}
+                ${isOffline ? 'Offline (' + offlineDuration + ')' : device.sensorError ? 'Sensor Error' : 'Online'}
               </span>
             </div>
             <div class="device-buttons">
@@ -1311,7 +1320,8 @@ void broadcastParkingStatus() {
   doc["type"] = "parking_status";
   JsonArray spots = doc.createNestedArray("spots");
 
-  doc["serverTime"] = millis();
+  unsigned long currentTime = millis();
+  doc["serverTime"] = currentTime;
 
   for (int i = 0; i < connectedSpots; i++) {
     JsonObject spot = spots.createNestedObject();
@@ -1321,6 +1331,11 @@ void broadcastParkingStatus() {
     spot["isOccupied"] = parkingSpots[i].isOccupied;
     spot["lastUpdate"] = parkingSpots[i].lastUpdate;
     spot["sensorError"] = parkingSpots[i].hasSensorError;
+    
+    // Calculate if the device is offline based on the time since last update
+    unsigned long timeSinceLastUpdate = currentTime - parkingSpots[i].lastUpdate;
+    bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
+    spot["isOffline"] = isOffline;
   }
 
   String jsonString;
@@ -2124,7 +2139,7 @@ void loop() {
     physicalOverrideActive = false;
   }
 
-  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
+  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) { // Keep this at 30s, no need to use DEVICE_OFFLINE_TIMEOUT
     Serial.println("Periodic WiFi connection check...");
     if (checkWiFiConnection()) {
       wifiDisconnectionDetected = false;
@@ -2209,10 +2224,22 @@ void updateSpotStatusOnApi(int index) {
   String parkingStatus = parkingSpots[index].isOccupied ? "occupied" : "open";
   bool hasSensorError = parkingSpots[index].hasSensorError;
   
+  // Check if the device is offline based on timestamp
+  unsigned long currentTime = millis();
+  unsigned long timeSinceLastUpdate = currentTime - parkingSpots[index].lastUpdate;
+  bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
+  
+  String systemStatus = isOffline ? "offline" : "online";
+  
   DynamicJsonDocument doc(256);
   doc["parkingStatus"] = parkingStatus;
   doc["sensorError"] = hasSensorError;
-  doc["systemStatus"] = "online";
+  doc["systemStatus"] = systemStatus;
+  
+  // Add timestamp info for debugging
+  doc["lastUpdateMs"] = parkingSpots[index].lastUpdate;
+  doc["currentTimeMs"] = currentTime;
+  doc["timeSinceUpdateMs"] = timeSinceLastUpdate;
   
   String payload;
   serializeJson(doc, payload);
@@ -2221,6 +2248,8 @@ void updateSpotStatusOnApi(int index) {
   
   if (makeApiRequest(endpoint, "PUT", payload)) {
     Serial.println("Successfully updated spot " + String(spotId) + " status on API");
+    Serial.printf("Device %d is %s (last update: %lu ms ago)\n", 
+                  spotId, isOffline ? "OFFLINE" : "ONLINE", timeSinceLastUpdate);
     parkingSpots[index].syncedWithApi = true;
   } else {
     Serial.println("Failed to update spot " + String(spotId) + " status on API");
@@ -2232,9 +2261,17 @@ void sendSensorDataToApi(int index, int distance, bool hasSensorError) {
   
   int spotId = parkingSpots[index].id;
   
+  // Check if the device is offline based on timestamp
+  unsigned long currentTime = millis();
+  unsigned long timeSinceLastUpdate = currentTime - parkingSpots[index].lastUpdate;
+  bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
+  
   DynamicJsonDocument doc(256);
   doc["distance"] = distance;
   doc["hasSensorError"] = hasSensorError;
+  doc["isOffline"] = isOffline;
+  doc["lastUpdateMs"] = parkingSpots[index].lastUpdate;
+  doc["timeSinceUpdateMs"] = timeSinceLastUpdate;
   
   String payload;
   serializeJson(doc, payload);
@@ -2243,6 +2280,8 @@ void sendSensorDataToApi(int index, int distance, bool hasSensorError) {
   
   if (makeApiRequest(endpoint, "POST", payload)) {
     Serial.println("Successfully sent sensor data for spot " + String(spotId) + " to API");
+    Serial.printf("Device %d is %s (last update: %lu ms ago)\n", 
+                  spotId, isOffline ? "OFFLINE" : "ONLINE", timeSinceLastUpdate);
     parkingSpots[index].syncedWithApi = true;
   } else {
     Serial.println("Failed to send sensor data for spot " + String(spotId) + " to API");

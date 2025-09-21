@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     // Log incoming sensor request
     await logApiRequest(deviceId, `/api/parking/sensor/${deviceId}`, 'POST', req.body, true);
     
-    const { distance, hasSensorError } = req.body;
+    const { distance, hasSensorError, isOffline, lastUpdateMs, timeSinceUpdateMs } = req.body;
     
     // Validate distance value
     if (distance === undefined && hasSensorError === undefined) {
@@ -54,8 +54,21 @@ export default async function handler(req, res) {
       updates['Sensor Error'] = false;
     }
     
-    // Always update system status to online when receiving sensor data
-    updates['System Status'] = 'online';
+    // Update system status based on offline flag if provided, otherwise default to online
+    if (isOffline !== undefined) {
+      updates['System Status'] = isOffline ? 'offline' : 'online';
+      
+      // Store additional timestamp information if provided
+      if (lastUpdateMs !== undefined) {
+        updates['lastUpdateMs'] = lastUpdateMs;
+      }
+      
+      if (timeSinceUpdateMs !== undefined) {
+        updates['timeSinceUpdateMs'] = timeSinceUpdateMs;
+      }
+    } else {
+      updates['System Status'] = 'online';
+    }
     
     // Update database
     await db.ref(`SParking/Device${deviceId}`).update(updates);

@@ -4,15 +4,26 @@ import db from './firebaseAdmin';
 const MAX_PING_AGE = 40000; // 40 seconds
 
 /**
- * Checks if a device is online based on its last health ping timestamp
+ * Checks if a device is online based on its status or last health ping timestamp
  * @param {string} deviceId - The ID of the device to check
  * @returns {Promise<boolean>} - True if the device is online, false if offline
  */
 export async function isDeviceOnline(deviceId) {
   try {
     const deviceRef = db.ref(`SParking/Device${deviceId}`);
-    const snapshot = await deviceRef.child('lastHealthPing').once('value');
-    const lastPing = snapshot.val();
+    
+    // First check if System Status field exists and use that
+    const systemStatusSnapshot = await deviceRef.child('System Status').once('value');
+    if (systemStatusSnapshot.exists()) {
+      const systemStatus = systemStatusSnapshot.val();
+      if (systemStatus === 'online' || systemStatus === 'offline') {
+        return systemStatus === 'online';
+      }
+    }
+    
+    // Fall back to checking health ping if System Status is not set
+    const lastPingSnapshot = await deviceRef.child('lastHealthPing').once('value');
+    const lastPing = lastPingSnapshot.val();
     
     if (!lastPing) {
       // If no health ping has been recorded, consider the device offline
@@ -33,7 +44,7 @@ export async function isDeviceOnline(deviceId) {
 
 /**
  * Updates the online status of all devices in the database based on health ping timestamps
- * Optimized to only update when status changes to reduce database operations
+ * and System Status field. Optimized to only update when status changes to reduce database operations.
  */
 export async function updateAllDevicesOnlineStatus() {
   try {
@@ -50,19 +61,42 @@ export async function updateAllDevicesOnlineStatus() {
       if (deviceKey.startsWith('Device')) {
         const device = devices[deviceKey];
         
-        if (!device.lastHealthPing) continue;
+        // First check if we have a System Status field and use that
+        if (device['System Status'] === 'offline') {
+          // If System Status is already set to offline, use that
+          if (device.isOnline !== false) {
+            updates[`${deviceKey}/isOnline`] = false;
+            updatedAny = true;
+          }
+          continue;
+        }
         
+        // If no health ping recorded, check if we need to update
+        if (!device.lastHealthPing) {
+          if (device.isOnline !== false) {
+            updates[`${deviceKey}/isOnline`] = false;
+            updatedAny = true;
+          }
+          continue;
+        }
+        
+        // Calculate time since last ping
         const lastPingTime = new Date(device.lastHealthPing).getTime();
         const currentTime = new Date().getTime();
         const timeSinceLastPing = currentTime - lastPingTime;
         
         // Calculate new online status
-        const isOnline = timeSinceLastPing <= MAX_PING_AGE;
+        const isOnline = timeSinceLastPing <= MAX_PING_AGE && device['System Status'] !== 'offline';
         
         // Only update if the status has changed or if isOnline property doesn't exist
         if (device.isOnline === undefined || device.isOnline !== isOnline) {
           updates[`${deviceKey}/isOnline`] = isOnline;
           updatedAny = true;
+          
+          // Also update System Status if needed
+          if (device['System Status'] !== (isOnline ? 'online' : 'offline')) {
+            updates[`${deviceKey}/System Status`] = isOnline ? 'online' : 'offline';
+          }
         }
       }
     }
