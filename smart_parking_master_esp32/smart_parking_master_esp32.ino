@@ -74,7 +74,7 @@ bool makeApiRequest(String endpoint, String method, String payload = "");
 void syncWithApi();
 void sendHealthPing();
 
-TaskHandle_t WebUITask;
+TaskHandle_t SlaveComTask;
 TaskHandle_t SyncTask;
 TaskHandle_t ApiTask;
 
@@ -218,32 +218,17 @@ void broadcastDiscovery() {
   Serial.println("Discovery broadcast sent: " + discoveryJson);
 }
 
-void broadcastParkingStatus() {
-  DynamicJsonDocument doc(2048);
-  doc["type"] = "parking_status";
-  JsonArray spots = doc.createNestedArray("spots");
-
+void updateSlaveDevicesStatus() {
   unsigned long currentTime = millis();
-  doc["serverTime"] = currentTime;
-
   for (int i = 0; i < connectedSpots; i++) {
-    JsonObject spot = spots.createNestedObject();
-    spot["id"] = parkingSpots[i].id;
-    spot["mac"] = parkingSpots[i].macAddress;
-    spot["distance"] = parkingSpots[i].distance;
-    spot["isOccupied"] = parkingSpots[i].isOccupied;
-    spot["lastUpdate"] = parkingSpots[i].lastUpdate;
-    spot["sensorError"] = parkingSpots[i].hasSensorError;
-    
-    // Calculate if the device is offline based on the time since last update
     unsigned long timeSinceLastUpdate = currentTime - parkingSpots[i].lastUpdate;
     bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
-    spot["isOffline"] = isOffline;
+    
+    if (isOffline) {
+      Serial.printf("Device %d (MAC: %s) is OFFLINE (last seen %lu ms ago)\n", 
+                   parkingSpots[i].id, parkingSpots[i].macAddress.c_str(), timeSinceLastUpdate);
+    }
   }
-
-  String jsonString;
-  serializeJson(doc, jsonString);
-  webSocket.broadcastTXT(jsonString);
 }
 
 bool checkWiFiConnection() {
@@ -292,8 +277,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
         String statusJson;
         serializeJson(statusDoc, statusJson);
         webSocket.sendTXT(num, statusJson);
-
-        broadcastParkingStatus();
       }
       break;
 
@@ -406,8 +389,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
               webSocket.sendTXT(i, idUpdateJson);
               Serial.printf("Sent ID update notification to client %d\n", i);
             }
-
-            broadcastParkingStatus();
+            
+            updateSlaveDevicesStatus();
           } else {
             DynamicJsonDocument responseDoc(256);
             responseDoc["type"] = "error";
@@ -438,7 +421,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
             Serial.printf("Removed device: MAC %s, ID %d\n", mac.c_str(), id);
 
-            broadcastParkingStatus();
+            updateSlaveDevicesStatus();
           } else {
             DynamicJsonDocument responseDoc(256);
             responseDoc["type"] = "error";
@@ -676,8 +659,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
                           distance, parkingSpots[spotIndex].isOccupied ? "yes" : "no");
 
             if (wasOccupied != parkingSpots[spotIndex].isOccupied) {
-              Serial.println("Spot status changed, broadcasting update to all clients");
-              broadcastParkingStatus();
+              Serial.println("Spot status changed, updating device status");
+              updateSlaveDevicesStatus();
             }
           }
         }
@@ -686,9 +669,51 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
   }
 }
 
-void webUITaskFunction(void* parameter) {
+void slaveComTaskFunction(void* parameter) {
   for (;;) {
     webSocket.loop();
+    
+    checkDiscoveryButton();
+    bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
+    if (buttonState == LOW) {
+      physicalOverrideActive = true;
+      discoveryMode = true;
+    } else {
+      physicalOverrideActive = false;
+    }
+    
+    unsigned long currentTime = millis();
+    
+    if (discoveryMode) {
+      if (physicalOverrideActive) {
+        if (currentTime % 300 < 150) {
+          digitalWrite(DISCOVERY_LED_PIN, HIGH);
+        } else {
+          digitalWrite(DISCOVERY_LED_PIN, LOW);
+        }
+      } else {
+        if (currentTime % 500 < 250) {
+          digitalWrite(DISCOVERY_LED_PIN, HIGH);
+        } else {
+          digitalWrite(DISCOVERY_LED_PIN, LOW);
+        }
+      }
+    } else {
+      digitalWrite(DISCOVERY_LED_PIN, LOW);
+    }
+    
+    systemErrorState = checkForSystemErrors();
+    if (systemErrorState) {
+      if (currentTime - lastErrorLedToggle >= ERROR_LED_TOGGLE_INTERVAL) {
+        static bool errorLedState = false;
+        errorLedState = !errorLedState;
+        digitalWrite(ERROR_LED_PIN, errorLedState ? HIGH : LOW);
+        lastErrorLedToggle = currentTime;
+      }
+    } else {
+      digitalWrite(ERROR_LED_PIN, LOW);
+    }
+    
     delay(1);
   }
 }
@@ -704,6 +729,28 @@ void apiTaskFunction(void* parameter) {
     
     if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
       sendHealthPing();
+    }
+    
+    static unsigned long lastWiFiCheck = 0;
+    if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
+      Serial.println("Periodic WiFi connection check...");
+      if (checkWiFiConnection()) {
+        wifiDisconnectionDetected = false;
+        Serial.println("WiFi connection restored");
+        
+        bool anyErrorsLeft = false;
+        for (int i = 0; i < connectedSpots; i++) {
+          if (parkingSpots[i].hasSensorError) {
+            anyErrorsLeft = true;
+            break;
+          }
+        }
+        
+        if (!anyErrorsLeft) {
+          systemErrorState = false;
+        }
+      }
+      lastWiFiCheck = currentTime;
     }
     
     delay(100);
@@ -734,10 +781,8 @@ void syncTaskFunction(void* parameter) {
         responseDoc["type"] = "discovery_status";
         responseDoc["active"] = false;
         responseDoc["physical_override"] = false;
-
-        String responseJson;
-        serializeJson(responseDoc, responseJson);
-        webSocket.broadcastTXT(responseJson);
+        
+        Serial.println("Discovery mode ended due to timeout");
       }
     }
 
@@ -831,11 +876,9 @@ void syncTaskFunction(void* parameter) {
           responseDoc["type"] = "discovery_status";
           responseDoc["active"] = true;
           responseDoc["physical_override"] = false;
-          responseDoc["message"] = wifiOK ? "Discovery mode activated due to multiple slaves offline" : "Discovery mode activated due to WiFi connection issue";
-
-          String responseJson;
-          serializeJson(responseDoc, responseJson);
-          webSocket.broadcastTXT(responseJson);
+          // No WebUI anymore, just log the state change
+          String message = wifiOK ? "Discovery mode activated due to multiple slaves offline" : "Discovery mode activated due to WiFi connection issue";
+          Serial.println(message);
 
           firstOfflineTime = 0;
           offlineCount = 0;
@@ -844,7 +887,7 @@ void syncTaskFunction(void* parameter) {
 
       previousActiveSpots = activeSpots;
 
-      broadcastParkingStatus();
+      updateSlaveDevicesStatus();
       lastSyncTime = currentTime;
     }
 
@@ -949,13 +992,13 @@ void setup() {
   }
 
   xTaskCreatePinnedToCore(
-    webUITaskFunction,
-    "WebUITask",
+    slaveComTaskFunction,
+    "SlaveComTask",
     10000,
     NULL,
     1,
-    &WebUITask,
-    1);
+    &SlaveComTask,
+    0);
 
   xTaskCreatePinnedToCore(
     syncTaskFunction,
@@ -974,9 +1017,6 @@ void setup() {
     1,
     &ApiTask,
     1);
-    
-  // Initial health ping will be handled by the API task
-  // No need to send health ping here since API task will handle it
 }
 
 void checkDiscoveryButton() {
@@ -991,14 +1031,7 @@ void checkDiscoveryButton() {
     lastDiscoveryTime = 0;
     digitalWrite(DISCOVERY_LED_PIN, HIGH);
 
-    DynamicJsonDocument responseDoc(128);
-    responseDoc["type"] = "discovery_status";
-    responseDoc["active"] = true;
-    responseDoc["physical_override"] = true;
-
-    String responseJson;
-    serializeJson(responseDoc, responseJson);
-    webSocket.broadcastTXT(responseJson);
+    Serial.println("Physical discovery override activated!");
   }
 
   if (buttonState == HIGH && lastButtonState == LOW) {
@@ -1011,12 +1044,7 @@ void checkDiscoveryButton() {
     DynamicJsonDocument responseDoc(128);
     responseDoc["type"] = "discovery_status";
     responseDoc["active"] = false;
-    responseDoc["physical_override"] = false;
-    responseDoc["message"] = "Discovery mode stopped due to button release";
-
-    String responseJson;
-    serializeJson(responseDoc, responseJson);
-    webSocket.broadcastTXT(responseJson);
+    Serial.println("Physical discovery override deactivated!");
   }
 
   lastButtonState = buttonState;
@@ -1028,7 +1056,6 @@ bool checkForSystemErrors() {
   bool hasMasterConnectionErrors = false;
   unsigned long currentTime = millis();
   
-  // Check for sensor errors in slaves
   for (int i = 0; i < connectedSpots; i++) {
     if (parkingSpots[i].hasSensorError) {
       hasSensorErrors = true;
@@ -1048,75 +1075,8 @@ bool checkForSystemErrors() {
 }
 
 void loop() {
-  unsigned long currentTime = millis();
-  static unsigned long lastWiFiCheck = 0;
 
-  checkDiscoveryButton();
-
-  bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
-
-  if (buttonState == LOW) {
-    physicalOverrideActive = true;
-    discoveryMode = true;
-  } else {
-    physicalOverrideActive = false;
-  }
-
-  if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) { // Keep this at 30s, no need to use DEVICE_OFFLINE_TIMEOUT
-    Serial.println("Periodic WiFi connection check...");
-    if (checkWiFiConnection()) {
-      wifiDisconnectionDetected = false;
-      Serial.println("WiFi connection restored");
-      
-      bool anyErrorsLeft = false;
-      for (int i = 0; i < connectedSpots; i++) {
-        if (parkingSpots[i].hasSensorError) {
-          anyErrorsLeft = true;
-          break;
-        }
-      }
-      
-      if (!anyErrorsLeft) {
-        systemErrorState = false;
-      }
-    }
-    lastWiFiCheck = currentTime;
-  }
-  
-  // API-related tasks now handled by ApiTask on Core 1
-  
-  systemErrorState = checkForSystemErrors();
-  
-  if (systemErrorState) {
-    if (currentTime - lastErrorLedToggle >= ERROR_LED_TOGGLE_INTERVAL) {
-      static bool errorLedState = false;
-      errorLedState = !errorLedState;
-      digitalWrite(ERROR_LED_PIN, errorLedState ? HIGH : LOW);
-      lastErrorLedToggle = currentTime;
-    }
-  } else {
-    digitalWrite(ERROR_LED_PIN, LOW);
-  }
-
-  if (discoveryMode) {
-    if (physicalOverrideActive) {
-      if (currentTime % 300 < 150) {
-        digitalWrite(DISCOVERY_LED_PIN, HIGH);
-      } else {
-        digitalWrite(DISCOVERY_LED_PIN, LOW);
-      }
-    } else {
-      if (currentTime % 500 < 250) {
-        digitalWrite(DISCOVERY_LED_PIN, HIGH);
-      } else {
-        digitalWrite(DISCOVERY_LED_PIN, LOW);
-      }
-    }
-  } else {
-    digitalWrite(DISCOVERY_LED_PIN, LOW);
-  }
-
-  delay(50);
+  delay(100);
 }
 
 void initializeSpotWithApi(int index) {
@@ -1140,7 +1100,6 @@ void updateSpotStatusOnApi(int index) {
   String parkingStatus = parkingSpots[index].isOccupied ? "occupied" : "open";
   bool hasSensorError = parkingSpots[index].hasSensorError;
   
-  // Check if the device is offline based on timestamp
   unsigned long currentTime = millis();
   unsigned long timeSinceLastUpdate = currentTime - parkingSpots[index].lastUpdate;
   bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
@@ -1152,7 +1111,6 @@ void updateSpotStatusOnApi(int index) {
   doc["sensorError"] = hasSensorError;
   doc["systemStatus"] = systemStatus;
   
-  // Add timestamp info for debugging
   doc["lastUpdateMs"] = parkingSpots[index].lastUpdate;
   doc["currentTimeMs"] = currentTime;
   doc["timeSinceUpdateMs"] = timeSinceLastUpdate;
@@ -1177,7 +1135,6 @@ void sendSensorDataToApi(int index, int distance, bool hasSensorError) {
   
   int spotId = parkingSpots[index].id;
   
-  // Check if the device is offline based on timestamp
   unsigned long currentTime = millis();
   unsigned long timeSinceLastUpdate = currentTime - parkingSpots[index].lastUpdate;
   bool isOffline = timeSinceLastUpdate > DEVICE_OFFLINE_TIMEOUT;
