@@ -1,15 +1,32 @@
 import { useState, useEffect } from 'react';
 import styles from '../styles/Home.module.css';
-import { getApiLogs } from '../lib/logHandler';
+import { getApiLogs, getCachedApiLogs } from '../lib/logHandler';
 
 export default function ApiLogs() {
   const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [selectedLog, setSelectedLog] = useState(null);
   const [filter, setFilter] = useState('all');
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
-    setLogs(getApiLogs());
+    // Initialize with cached logs first for fast UI rendering
+    setLogs(getCachedApiLogs());
+    
+    // Then fetch from Firebase
+    const fetchLogs = async () => {
+      setLoading(true);
+      try {
+        const firebaseLogs = await getApiLogs();
+        setLogs(firebaseLogs);
+      } catch (error) {
+        console.error('Error fetching logs:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchLogs();
     
     const handleLogUpdate = (event) => {
       setLogs([...event.detail.logs]);
@@ -103,7 +120,11 @@ export default function ApiLogs() {
           </div>
 
           <div className={styles.apiLogsList}>
-            {filteredLogs.length > 0 ? (
+            {loading ? (
+              <div className={styles.loadingMessage}>
+                Loading API logs from Firebase...
+              </div>
+            ) : filteredLogs.length > 0 ? (
               filteredLogs.map((log) => (
                 <div 
                   key={log.id} 

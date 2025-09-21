@@ -350,6 +350,32 @@
   color: #6c757d;
 }
 
+.loadingMessage {
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: #6c757d;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.loadingMessage:after {
+  content: "...";
+  animation: dots 1.5s steps(5, end) infinite;
+}
+
+@keyframes dots {
+  0%, 20% {
+    content: ".";
+  }
+  40% {
+    content: "..";
+  }
+  60%, 100% {
+    content: "...";
+  }
+}
+
 /* Master ESP32 status styles */
 .masterStatus {
   width: 100%;
