@@ -10,7 +10,7 @@ function MyApp({ Component, pageProps }) {
     // Set up interval for periodic status updates
     const interval = setInterval(() => {
       updateDeviceStatuses();
-    }, 20000); // Check every 20 seconds to detect offline status more quickly
+    }, 30000); // Check every 30 seconds to detect offline status more quickly
     
     return () => clearInterval(interval);
   }, []);

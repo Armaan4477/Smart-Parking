@@ -1,4 +1,5 @@
 import db from './firebaseAdmin';
+import { logApiRequest } from './logHandler';
 
 // The maximum time allowed since last health ping before considering a device offline (in milliseconds)
 const MAX_PING_AGE = 40000; // 40 seconds
@@ -105,10 +106,16 @@ export async function updateAllDevicesOnlineStatus() {
     if (updatedAny) {
       await db.ref('SParking').update(updates);
       console.log('Updated online status for devices with changes');
+      
+      // Log successful status updates
+      await logApiRequest('system', 'deviceStatus/update', 'SYSTEM', updates, true);
     } else {
       console.log('No device status changes detected');
     }
   } catch (error) {
     console.error('Error updating devices online status:', error);
+    
+    // Log the error
+    await logApiRequest('system', 'deviceStatus/update', 'SYSTEM', {}, false, error.message);
   }
 }

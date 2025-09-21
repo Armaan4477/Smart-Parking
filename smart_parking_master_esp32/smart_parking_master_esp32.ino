@@ -41,7 +41,7 @@ unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
-const unsigned long OFFLINE_DETECTION_WINDOW = 10000;
+const unsigned long OFFLINE_DETECTION_WINDOW = 9000;
 const unsigned long DEVICE_OFFLINE_TIMEOUT = 30000;
 unsigned long firstOfflineTime = 0;
 int offlineCount = 0;
