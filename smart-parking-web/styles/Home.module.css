@@ -320,3 +320,41 @@
   text-align: center;
   color: #6c757d;
 }
+
+/* Online/Offline status styles */
+.onlineStatus {
+  font-weight: 500;
+  color: #28a745;
+  background-color: rgba(40, 167, 69, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  margin: 5px 0;
+}
+
+.offlineStatus {
+  font-weight: 500;
+  color: #dc3545;
+  background-color: rgba(220, 53, 69, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  margin: 5px 0;
+}
+
+.offlineWarning {
+  font-weight: 500;
+  color: #dc3545;
+  background-color: rgba(220, 53, 69, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  margin: 5px 0;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.7; }
+  50% { opacity: 1; }
+  100% { opacity: 0.7; }
+}

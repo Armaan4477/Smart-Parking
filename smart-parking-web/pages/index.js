@@ -10,6 +10,33 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [updatedSpots, setUpdatedSpots] = useState({});
 
+  // Function to update the online status for devices
+  const updateDeviceOnlineStatus = async () => {
+    try {
+      // Call the status update API
+      const response = await fetch('/api/parking/status/update');
+      if (!response.ok) {
+        console.error('Failed to update device online status');
+      }
+    } catch (error) {
+      console.error('Error updating device online status:', error);
+    }
+  };
+  
+  // Periodically check and update device online status
+  useEffect(() => {
+    // Update status when component mounts
+    updateDeviceOnlineStatus();
+    
+    // Set up interval to update status every minute
+    const interval = setInterval(() => {
+      updateDeviceOnlineStatus();
+    }, 60000); // Check every 60 seconds
+    
+    // Clean up interval on unmount
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     // Initialize with loading state
     setLoading(true);
@@ -121,6 +148,12 @@ export default function Home() {
                       <h3>Spot {deviceId}</h3>
                       <p>Status: {spot['Parking Status']}</p>
                       <p>System: {spot['System Status'] || 'unknown'}</p>
+                      <p className={spot.isOnline ? styles.onlineStatus : styles.offlineStatus}>
+                        {spot.isOnline ? 'Online' : 'Offline'}
+                      </p>
+                      {deviceId === 'master' && !spot.isOnline && (
+                        <p className={styles.offlineWarning}>Master ESP32 not reachable!</p>
+                      )}
                       {spot['Sensor Error'] && (
                         <p className={styles.errorText}>Sensor Error</p>
                       )}

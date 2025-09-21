@@ -24,6 +24,8 @@ bool physicalOverrideActive = false;
 bool systemErrorState = false;
 unsigned long lastErrorLedToggle = 0;
 const unsigned long ERROR_LED_TOGGLE_INTERVAL = 250;
+const unsigned long HEALTH_PING_INTERVAL = 30000; // 30 seconds
+unsigned long lastHealthPingTime = 0;
 
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
@@ -2141,6 +2143,11 @@ void loop() {
     syncWithApi();
     lastApiSyncTime = currentTime;
   }
+  
+  // Send health ping at regular intervals
+  if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
+    sendHealthPing();
+  }
 
   systemErrorState = checkForSystemErrors();
   
@@ -2281,6 +2288,27 @@ bool makeApiRequest(String endpoint, String method, String payload) {
   
   http.end();
   return success;
+}
+
+void sendHealthPing() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  Serial.println("Sending health ping to API...");
+  
+  // Prepare the JSON payload
+  StaticJsonDocument<128> jsonDoc;
+  jsonDoc["deviceId"] = "master"; // Using "master" as deviceId for the ESP32 master
+  
+  String payload;
+  serializeJson(jsonDoc, payload);
+  
+  if (makeApiRequest("/health", "POST", payload)) {
+    Serial.println("Health ping sent successfully");
+  } else {
+    Serial.println("Failed to send health ping");
+  }
+  
+  lastHealthPingTime = millis();
 }
 
 void syncWithApi() {
