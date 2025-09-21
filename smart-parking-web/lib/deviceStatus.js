@@ -33,6 +33,7 @@ export async function isDeviceOnline(deviceId) {
 
 /**
  * Updates the online status of all devices in the database based on health ping timestamps
+ * Optimized to only update when status changes to reduce database operations
  */
 export async function updateAllDevicesOnlineStatus() {
   try {
@@ -40,10 +41,13 @@ export async function updateAllDevicesOnlineStatus() {
     const snapshot = await db.ref('SParking').once('value');
     const devices = snapshot.val() || {};
     
+    // Track devices needing updates to batch them if possible
+    const updates = {};
+    let updatedAny = false;
+    
     // Check each device
     for (const deviceKey in devices) {
       if (deviceKey.startsWith('Device')) {
-        const deviceId = deviceKey.replace('Device', '');
         const device = devices[deviceKey];
         
         if (!device.lastHealthPing) continue;
@@ -52,13 +56,24 @@ export async function updateAllDevicesOnlineStatus() {
         const currentTime = new Date().getTime();
         const timeSinceLastPing = currentTime - lastPingTime;
         
-        // Update online status
+        // Calculate new online status
         const isOnline = timeSinceLastPing <= MAX_PING_AGE;
-        await db.ref(`SParking/${deviceKey}/isOnline`).set(isOnline);
+        
+        // Only update if the status has changed or if isOnline property doesn't exist
+        if (device.isOnline === undefined || device.isOnline !== isOnline) {
+          updates[`${deviceKey}/isOnline`] = isOnline;
+          updatedAny = true;
+        }
       }
     }
     
-    console.log('Updated online status for all devices');
+    // Apply batch updates if any device status has changed
+    if (updatedAny) {
+      await db.ref('SParking').update(updates);
+      console.log('Updated online status for devices with changes');
+    } else {
+      console.log('No device status changes detected');
+    }
   } catch (error) {
     console.error('Error updating devices online status:', error);
   }
