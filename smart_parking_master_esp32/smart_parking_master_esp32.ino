@@ -6,7 +6,7 @@
 #include <Preferences.h>
 #include <HTTPClient.h>
 
-const char* ssid = "JoeMama";
+const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
 const char* API_BASE_URL = "https://smart-parking-44.vercel.app";
@@ -24,7 +24,7 @@ bool physicalOverrideActive = false;
 bool systemErrorState = false;
 unsigned long lastErrorLedToggle = 0;
 const unsigned long ERROR_LED_TOGGLE_INTERVAL = 250;
-const unsigned long HEALTH_PING_INTERVAL = 30000; // 30 seconds
+const unsigned long HEALTH_PING_INTERVAL = 10000;
 unsigned long lastHealthPingTime = 0;
 
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
@@ -71,6 +71,7 @@ void updateSpotStatusOnApi(int spotIndex);
 void sendSensorDataToApi(int spotIndex, int distance, bool hasSensorError);
 bool makeApiRequest(String endpoint, String method, String payload = "");
 void syncWithApi();
+void sendHealthPing();
 
 const char mainPage[] PROGMEM = R"html(
 <!DOCTYPE html>
@@ -2034,6 +2035,10 @@ void setup() {
     1,
     &SyncTask,
     0);
+    
+  if (WiFi.status() == WL_CONNECTED) {
+    sendHealthPing();
+  }
 }
 
 void checkDiscoveryButton() {
@@ -2081,9 +2086,11 @@ void checkDiscoveryButton() {
 
 bool checkForSystemErrors() {
   bool hasSensorErrors = false;
-  bool hasConnectionErrors = false;
+  bool hasSlaveConnectionErrors = false;
+  bool hasMasterConnectionErrors = false;
   unsigned long currentTime = millis();
   
+  // Check for sensor errors in slaves
   for (int i = 0; i < connectedSpots; i++) {
     if (parkingSpots[i].hasSensorError) {
       hasSensorErrors = true;
@@ -2091,16 +2098,15 @@ bool checkForSystemErrors() {
     }
     
     if ((currentTime - parkingSpots[i].lastUpdate) > 15000) {
-      hasConnectionErrors = true;
-      break;
+      hasSlaveConnectionErrors = true;
     }
   }
   
   if (wifiDisconnectionDetected) {
-    hasConnectionErrors = true;
+    hasMasterConnectionErrors = true;
   }
-  
-  return hasSensorErrors || hasConnectionErrors;
+
+  return hasSensorErrors || hasMasterConnectionErrors;
 }
 
 void loop() {
@@ -2144,7 +2150,6 @@ void loop() {
     lastApiSyncTime = currentTime;
   }
   
-  // Send health ping at regular intervals
   if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
     sendHealthPing();
   }
@@ -2295,9 +2300,11 @@ void sendHealthPing() {
   
   Serial.println("Sending health ping to API...");
   
-  // Prepare the JSON payload
-  StaticJsonDocument<128> jsonDoc;
-  jsonDoc["deviceId"] = "master"; // Using "master" as deviceId for the ESP32 master
+  StaticJsonDocument<256> jsonDoc;
+  jsonDoc["deviceId"] = "master";
+  jsonDoc["systemStatus"] = "online";
+  jsonDoc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
+  jsonDoc["slaveDevices"] = connectedSpots;
   
   String payload;
   serializeJson(jsonDoc, payload);
@@ -2315,6 +2322,8 @@ void syncWithApi() {
   if (WiFi.status() != WL_CONNECTED) return;
   
   Serial.println("Syncing data with API...");
+  
+  sendHealthPing();
   
   for (int i = 0; i < connectedSpots; i++) {
     if (!parkingSpots[i].syncedWithApi) {

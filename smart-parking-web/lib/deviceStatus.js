@@ -1,7 +1,7 @@
 import db from './firebaseAdmin';
 
 // The maximum time allowed since last health ping before considering a device offline (in milliseconds)
-const MAX_PING_AGE = 60000; // 1 minute
+const MAX_PING_AGE = 40000; // 40 seconds
 
 /**
  * Checks if a device is online based on its last health ping timestamp
