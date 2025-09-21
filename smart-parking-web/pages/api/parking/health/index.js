@@ -24,8 +24,14 @@ export default async function handler(req, res) {
     const now = new Date().toISOString();
     const updates = {
       'lastHealthPing': now,
-      'isOnline': true
+      'isOnline': true,
+      'System Status': 'online' // Ensure System Status is also set to online
     };
+    
+    // If systemStatus was provided in the request, use that value
+    if (req.body && req.body.systemStatus) {
+      updates['System Status'] = req.body.systemStatus;
+    }
     
     await db.ref(`SParking/Device${deviceId}`).update(updates);
     
