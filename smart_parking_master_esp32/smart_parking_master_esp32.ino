@@ -42,7 +42,7 @@ unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
 const unsigned long OFFLINE_DETECTION_WINDOW = 10000;
-const unsigned long DEVICE_OFFLINE_TIMEOUT = 30000; // 30 seconds before considering a device offline
+const unsigned long DEVICE_OFFLINE_TIMEOUT = 30000;
 unsigned long firstOfflineTime = 0;
 int offlineCount = 0;
 bool wifiDisconnectionDetected = false;
@@ -615,14 +615,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
             parkingSpots[spotIndex].hasSensorError = hasSensorError;
             
-            if (wasOccupied != parkingSpots[spotIndex].isOccupied || 
-                hadSensorError != parkingSpots[spotIndex].hasSensorError) {
-                  
-              if (WiFi.status() == WL_CONNECTED) {
-                sendSensorDataToApi(spotIndex, distance, hasSensorError);
-              }
-            }
-
             if (hadSensorError && !hasSensorError) {
               DynamicJsonDocument notifyDoc(256);
               notifyDoc["type"] = "notification";
@@ -669,7 +661,25 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
   }
 }
 
+void updateLocalStatusLeds() {
+  for (int i = 0; i < connectedSpots; i++) {
+    DynamicJsonDocument response(128);
+    response["id"] = parkingSpots[i].id;
+    response["led"] = parkingSpots[i].isOccupied ? "red" : "green";
+
+    String jsonResponse;
+    serializeJson(response, jsonResponse);
+    
+    for (uint8_t num = 0; num < webSocket.connectedClients(); num++) {
+      webSocket.sendTXT(num, jsonResponse);
+    }
+  }
+}
+
 void slaveComTaskFunction(void* parameter) {
+  unsigned long lastLocalUpdateTime = 0;
+  const unsigned long LOCAL_UPDATE_INTERVAL = 2000;
+  
   for (;;) {
     webSocket.loop();
     
@@ -683,6 +693,11 @@ void slaveComTaskFunction(void* parameter) {
     }
     
     unsigned long currentTime = millis();
+    
+    if (currentTime - lastLocalUpdateTime >= LOCAL_UPDATE_INTERVAL) {
+      updateLocalStatusLeds();
+      lastLocalUpdateTime = currentTime;
+    }
     
     if (discoveryMode) {
       if (physicalOverrideActive) {
@@ -876,7 +891,6 @@ void syncTaskFunction(void* parameter) {
           responseDoc["type"] = "discovery_status";
           responseDoc["active"] = true;
           responseDoc["physical_override"] = false;
-          // No WebUI anymore, just log the state change
           String message = wifiOK ? "Discovery mode activated due to multiple slaves offline" : "Discovery mode activated due to WiFi connection issue";
           Serial.println(message);
 
