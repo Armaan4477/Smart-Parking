@@ -32,8 +32,8 @@ AsyncWebServer server(80);
 
 const int DISTANCE_THRESHOLD = 45;
 const int MAX_DISTANCE = 200;
-const unsigned long SYNC_INTERVAL = 5000;
-const unsigned long API_SYNC_INTERVAL = 10000;
+const unsigned long SYNC_INTERVAL = 4000;
+const unsigned long API_SYNC_INTERVAL = 6000;
 
 const unsigned long DISCOVERY_DURATION = 60000;
 const unsigned long DISCOVERY_INTERVAL = 5000;
@@ -41,8 +41,8 @@ unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
 
-const unsigned long OFFLINE_DETECTION_WINDOW = 9000;
-const unsigned long DEVICE_OFFLINE_TIMEOUT = 30000;
+const unsigned long OFFLINE_DETECTION_WINDOW = 8000;
+const unsigned long DEVICE_OFFLINE_TIMEOUT = 20000;
 unsigned long firstOfflineTime = 0;
 int offlineCount = 0;
 bool wifiDisconnectionDetected = false;
