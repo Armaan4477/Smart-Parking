@@ -1,5 +1,32 @@
-import { ref, set, update, get, onValue, push, query, orderByChild, limitToLast, serverTimestamp } from 'firebase/database';
+import { ref, set, update, get, onValue, push, query, orderByChild, limitToLast, serverTimestamp, off } from 'firebase/database';
 import { database } from './firebase';
+
+// Subscribe to real-time updates for all parking spots
+export const subscribeToAllParkingSpots = (callback) => {
+  const spotsRef = ref(database, 'SParking');
+  
+  // Set up the listener for real-time updates
+  onValue(spotsRef, (snapshot) => {
+    if (snapshot.exists()) {
+      callback({ success: true, data: snapshot.val() });
+    } else {
+      callback({ success: true, data: {} }); // Return empty object if no spots found
+    }
+  }, (error) => {
+    console.error('Error subscribing to parking spots:', error);
+    callback({ success: false, error: error.message });
+  });
+
+  // Return reference so it can be used to unsubscribe
+  return spotsRef;
+};
+
+// Unsubscribe from real-time updates
+export const unsubscribeFromParkingSpots = (spotsRef) => {
+  if (spotsRef) {
+    off(spotsRef);
+  }
+};
 
 // Update parking spot status
 export const updateParkingSpot = async (deviceId, data) => {
