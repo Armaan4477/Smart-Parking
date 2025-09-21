@@ -1,4 +1,4 @@
-import { updateAllDevicesOnlineStatus } from '../../../lib/deviceStatus';
+import { updateAllDevicesOnlineStatus } from '../../../../lib/deviceStatus';
 
 export default async function handler(req, res) {
   // Only allow GET or POST requests for this endpoint
