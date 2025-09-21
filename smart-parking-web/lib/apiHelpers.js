@@ -7,6 +7,11 @@
  */
 export const validateDeviceId = (deviceId) => {
   if (!deviceId) return false;
+  
+  // Special case for master ESP32
+  if (deviceId === 'master') return true;
+  
+  // For normal numbered spots
   const id = parseInt(deviceId);
   return !isNaN(id) && id > 0;
 };

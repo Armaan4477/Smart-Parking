@@ -10,32 +10,7 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [updatedSpots, setUpdatedSpots] = useState({});
 
-  // Function to update the online status for devices
-  const updateDeviceOnlineStatus = async () => {
-    try {
-      // Call the status update API
-      const response = await fetch('/api/parking/status/update');
-      if (!response.ok) {
-        console.error('Failed to update device online status');
-      }
-    } catch (error) {
-      console.error('Error updating device online status:', error);
-    }
-  };
-  
-  // Periodically check and update device online status
-  useEffect(() => {
-    // Update status when component mounts
-    updateDeviceOnlineStatus();
-    
-    // Set up interval to update status every minute
-    const interval = setInterval(() => {
-      updateDeviceOnlineStatus();
-    }, 60000); // Check every 60 seconds
-    
-    // Clean up interval on unmount
-    return () => clearInterval(interval);
-  }, []);
+  // Status updates are now handled in _app.js
 
   useEffect(() => {
     // Initialize with loading state
@@ -115,6 +90,20 @@ export default function Home() {
           API status: Active
         </p>
         
+        <div className={styles.masterStatus}>
+          {parkingSpots.Devicemaster ? (
+            <div className={parkingSpots.Devicemaster.isOnline ? styles.masterOnline : styles.masterOffline}>
+              <div className={styles.statusIcon}></div>
+              <span>Master ESP32: {parkingSpots.Devicemaster.isOnline ? 'Online' : 'Offline - Not Reachable'}</span>
+            </div>
+          ) : (
+            <div className={styles.masterOffline}>
+              <div className={styles.statusIcon}></div>
+              <span>Master ESP32: Not Connected</span>
+            </div>
+          )}
+        </div>
+        
         <div className={styles.dashboard}>
           <div className={styles.parkingStatus}>
             <h2>Parking Spots Status</h2>
@@ -132,9 +121,9 @@ export default function Home() {
               <div className={styles.loading}>
                 <p>Loading parking data...</p>
               </div>
-            ) : Object.keys(parkingSpots).length > 0 ? (
+            ) : Object.keys(parkingSpots).filter(key => key !== 'Devicemaster').length > 0 ? (
               <div className={styles.spotsGrid}>
-                {Object.entries(parkingSpots).map(([key, spot]) => {
+                {Object.entries(parkingSpots).filter(([key]) => key !== 'Devicemaster').map(([key, spot]) => {
                   const deviceId = key.replace('Device', '');
                   const isUpdated = updatedSpots[key];
                   return (
@@ -148,12 +137,6 @@ export default function Home() {
                       <h3>Spot {deviceId}</h3>
                       <p>Status: {spot['Parking Status']}</p>
                       <p>System: {spot['System Status'] || 'unknown'}</p>
-                      <p className={spot.isOnline ? styles.onlineStatus : styles.offlineStatus}>
-                        {spot.isOnline ? 'Online' : 'Offline'}
-                      </p>
-                      {deviceId === 'master' && !spot.isOnline && (
-                        <p className={styles.offlineWarning}>Master ESP32 not reachable!</p>
-                      )}
                       {spot['Sensor Error'] && (
                         <p className={styles.errorText}>Sensor Error</p>
                       )}

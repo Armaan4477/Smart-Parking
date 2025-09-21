@@ -321,7 +321,54 @@
   color: #6c757d;
 }
 
-/* Online/Offline status styles */
+/* Master ESP32 status styles */
+.masterStatus {
+  width: 100%;
+  max-width: 800px;
+  margin: 15px auto;
+  text-align: center;
+}
+
+.masterOnline, .masterOffline {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.masterOnline {
+  background-color: rgba(40, 167, 69, 0.1);
+  color: #28a745;
+  border: 1px solid rgba(40, 167, 69, 0.3);
+}
+
+.masterOffline {
+  background-color: rgba(220, 53, 69, 0.1);
+  color: #dc3545;
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  animation: pulse 1.5s infinite;
+}
+
+.statusIcon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 10px;
+}
+
+.masterOnline .statusIcon {
+  background-color: #28a745;
+  box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.3);
+}
+
+.masterOffline .statusIcon {
+  background-color: #dc3545;
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.3);
+}
+
+/* Old Online/Offline status styles - keeping for reference */
 .onlineStatus {
   font-weight: 500;
   color: #28a745;
