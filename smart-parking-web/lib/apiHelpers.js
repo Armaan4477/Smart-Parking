@@ -17,6 +17,19 @@ export const validateDeviceId = (deviceId) => {
 };
 
 /**
+ * Helper to validate MAC address format
+ * @param {string} macAddress 
+ * @returns {boolean}
+ */
+export const validateMacAddress = (macAddress) => {
+  if (!macAddress) return false;
+  
+  // Check if it's a valid MAC address format (e.g., 01:23:45:67:89:AB or 01-23-45-67-89-AB)
+  const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+  return macRegex.test(macAddress);
+};
+
+/**
  * Helper to validate parking spot update data
  * @param {object} data 
  * @returns {object} Validation result

@@ -1,7 +1,38 @@
 import '../styles/globals.css';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
+import { isLoggedIn } from '../lib/auth';
 
 function MyApp({ Component, pageProps }) {
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Check authentication on initial load and route changes
+  useEffect(() => {
+    const checkAuth = () => {
+      // Skip auth check for login page
+      if (router.pathname === '/login') {
+        setAuthChecked(true);
+        return;
+      }
+
+      // Check if user is logged in
+      if (!isLoggedIn()) {
+        // Redirect to login if not on login page
+        router.push('/login');
+      } else {
+        setAuthChecked(true);
+      }
+    };
+
+    checkAuth();
+    router.events.on('routeChangeComplete', checkAuth);
+    
+    return () => {
+      router.events.off('routeChangeComplete', checkAuth);
+    };
+  }, [router]);
+
   // Set up status check on app initialization
   useEffect(() => {
     // Initial status update when app loads
@@ -25,6 +56,12 @@ function MyApp({ Component, pageProps }) {
       console.error('Error updating device statuses:', error);
     }
   };
+  
+  // Don't render component until authentication is checked
+  // Except for the login page which should always render
+  if (!authChecked && router.pathname !== '/login') {
+    return <div>Loading...</div>;
+  }
   
   return <Component {...pageProps} />;
 }

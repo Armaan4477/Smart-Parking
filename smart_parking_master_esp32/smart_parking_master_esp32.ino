@@ -6,7 +6,7 @@
 #include <Preferences.h>
 #include <HTTPClient.h>
 
-const char* ssid = "JoeMama";
+const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
 const char* API_BASE_URL = "https://smart-parking-44.vercel.app";

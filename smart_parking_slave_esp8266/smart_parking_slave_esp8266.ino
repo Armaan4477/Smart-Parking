@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 #include <WiFiUdp.h>
 
-const char* ssid = "JoeMama";
+const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
 String masterIP = "";
