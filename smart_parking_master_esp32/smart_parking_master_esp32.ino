@@ -30,10 +30,10 @@ unsigned long lastHealthPingTime = 0;
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
 
-const int DISTANCE_THRESHOLD = 45;
+const int DISTANCE_THRESHOLD = 8;
 const int MAX_DISTANCE = 200;
-const unsigned long SYNC_INTERVAL = 4000;
-const unsigned long API_SYNC_INTERVAL = 6000;
+const unsigned long SYNC_INTERVAL = 2000;
+const unsigned long API_SYNC_INTERVAL = 4000;
 
 const unsigned long DISCOVERY_DURATION = 60000;
 const unsigned long DISCOVERY_INTERVAL = 5000;
