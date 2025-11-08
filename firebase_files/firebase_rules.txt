@@ -1,0 +1,48 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "api_logs": {
+      ".indexOn": ["timestamp"],
+      "$logId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "users": {
+      ".indexOn": ["username"],
+      "$uid": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "SConfig": {
+      "thresholds": {
+        ".indexOn": ["value", "updatedAt"],
+        "$deviceConfig": {
+          ".read": true,
+          ".write": true,
+          ".indexOn": ["value", "updatedAt"]
+        }
+      }
+    },
+    "SParking": {
+      ".indexOn": ["DeviceCount"],
+      "Device1": {
+        ".indexOn": ["MAC Address", "registeredAt"]
+      },
+      "Device2": {
+        ".indexOn": ["MAC Address", "registeredAt"]
+      },
+      "Device3": {
+        ".indexOn": ["MAC Address", "registeredAt"]
+      },
+      "Device4": {
+        ".indexOn": ["MAC Address", "registeredAt"]
+      },
+      "Device5": {
+        ".indexOn": ["MAC Address", "registeredAt"]
+      }
+    }
+  }
+}

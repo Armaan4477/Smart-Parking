@@ -1,0 +1,445 @@
+{
+  "SConfig": {
+    "thresholds": {
+      "default": {
+        "updatedAt": "2025-10-11T16:48:07.925Z",
+        "value": 55
+      },
+      "updateRequired": true
+    }
+  },
+  "SParking": {
+    "Device1": {
+      "MAC Address": "E8:DB:84:DE:DD:26",
+      "Parking Status": "open",
+      "Sensor Error": false,
+      "System Status": "offline",
+      "isOnline": false,
+      "lastSeen": "2025-10-13T02:13:04.599Z",
+      "lastUpdateMs": 183605,
+      "timeSinceUpdateMs": 1157557
+    },
+    "Device2": {
+      "Parking Status": "open",
+      "Sensor Error": false,
+      "System Status": "offline",
+      "isOnline": false,
+      "lastSeen": "2025-10-13T02:16:34.847Z",
+      "lastUpdateMs": 241175,
+      "timeSinceUpdateMs": 947309
+    },
+    "DeviceCount": {
+      "System Status": "offline",
+      "isOnline": false,
+      "lastSeen": "2025-10-13T02:16:05.376Z",
+      "timeSinceUpdateMs": 976780
+    },
+    "DeviceMapping": {
+      "E8DB84DEDD26": {
+        "deviceId": 1,
+        "macAddress": "E8:DB:84:DE:DD:26",
+        "registeredAt": "2025-10-13T02:13:01.687Z"
+      },
+      "E8DB84DEE041": {
+        "deviceId": "[object Object]1",
+        "macAddress": "E8:DB:84:DE:E0:41",
+        "registeredAt": "2025-10-13T02:16:04.500Z"
+      },
+      "System Status": "offline",
+      "isOnline": false,
+      "lastSeen": "2025-10-13T02:13:04.599Z",
+      "timeSinceUpdateMs": 1157557
+    },
+    "Devicemaster": {
+      "System Status": "offline",
+      "isOnline": false,
+      "lastHealthPing": "2025-10-13T02:29:50.621Z"
+    }
+  },
+  "adminConfig": {
+    "adminPasswordHash": "3a8d1be4f9a8ac000a0a1f346e5730185a7c09896a9c34be233b5401f71011ce",
+    "adminSalt": "fecdaafc30df6d7088f092eceba566a7",
+    "updatedAt": 1760210110561,
+    "updatedBy": "admin"
+  },
+  "api_logs": {
+    "-O_fvJem4vN735WQAYbi": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvJem4vN735WQAYbi",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452337327
+    },
+    "-O_fvJpnlBVIVs4u1aAC": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvJpnlBVIVs4u1aAC",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452338031
+    },
+    "-O_fvK7deQdCBAiwPb2c": {
+      "body": "{\"Devicemaster/isOnline\":false}",
+      "deviceId": "system",
+      "endpoint": "deviceStatus/update",
+      "id": "-O_fvK7deQdCBAiwPb2c",
+      "method": "SYSTEM",
+      "success": true,
+      "timestamp": 1758452339356
+    },
+    "-O_fvKe8iHNA7nClFyut": {
+      "body": "{\"distance\":155,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":655282,\"timeSinceUpdateMs\":434}",
+      "deviceId": "2",
+      "endpoint": "/api/parking/sensor/2",
+      "id": "-O_fvKe8iHNA7nClFyut",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452341500
+    },
+    "-O_fvLJLGO_c6G_oAywY": {
+      "body": "{\"distance\":150,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":658644,\"timeSinceUpdateMs\":563}",
+      "deviceId": "3",
+      "endpoint": "/api/parking/sensor/3",
+      "id": "-O_fvLJLGO_c6G_oAywY",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452344201
+    },
+    "-O_fvLt4aERTVh0QuqOm": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":660727,\"currentTimeMs\":661253,\"timeSinceUpdateMs\":526}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/4",
+      "id": "-O_fvLt4aERTVh0QuqOm",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452346552
+    },
+    "-O_fvMTe0eV3970t1NDi": {
+      "body": "{\"distance\":147,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":662674,\"timeSinceUpdateMs\":626}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/sensor/4",
+      "id": "-O_fvMTe0eV3970t1NDi",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452348839
+    },
+    "-O_fvNRo6cb17b5tn9u1": {
+      "body": "{\"deviceId\":\"master\",\"systemStatus\":\"online\",\"wifiConnected\":true,\"slaveDevices\":4}",
+      "deviceId": "master",
+      "endpoint": "/api/parking/health",
+      "id": "-O_fvNRo6cb17b5tn9u1",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452352928
+    },
+    "-O_fvOq2XCKGOdRMtv7R": {
+      "body": "{\"deviceId\":\"master\",\"systemStatus\":\"online\",\"wifiConnected\":true,\"slaveDevices\":4}",
+      "deviceId": "master",
+      "endpoint": "/api/parking/health",
+      "id": "-O_fvOq2XCKGOdRMtv7R",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452358639
+    },
+    "-O_fvPFOA7C-bRtC6oDv": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":673311,\"currentTimeMs\":675371,\"timeSinceUpdateMs\":2060}",
+      "deviceId": "1",
+      "endpoint": "/api/parking/1",
+      "id": "-O_fvPFOA7C-bRtC6oDv",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452360325
+    },
+    "-O_fvP_1lhiAjWdQpmhx": {
+      "body": "{\"distance\":147,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":676703,\"timeSinceUpdateMs\":313}",
+      "deviceId": "1",
+      "endpoint": "/api/parking/sensor/1",
+      "id": "-O_fvP_1lhiAjWdQpmhx",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452361646
+    },
+    "-O_fvPti-Ge1s_6lShWB": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":677297,\"currentTimeMs\":678349,\"timeSinceUpdateMs\":1052}",
+      "deviceId": "2",
+      "endpoint": "/api/parking/2",
+      "id": "-O_fvPti-Ge1s_6lShWB",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452362970
+    },
+    "-O_fvQDRYPXTeLD8w-dr": {
+      "body": "{\"distance\":155,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":679244,\"timeSinceUpdateMs\":428}",
+      "deviceId": "2",
+      "endpoint": "/api/parking/sensor/2",
+      "id": "-O_fvQDRYPXTeLD8w-dr",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452364296
+    },
+    "-O_fvQlHCxatx9OgAk6r": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvQlHCxatx9OgAk6r",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452366526
+    },
+    "-O_fvQysnSl9b-jdTbyj": {
+      "body": "{\"Devicemaster/isOnline\":false}",
+      "deviceId": "system",
+      "endpoint": "deviceStatus/update",
+      "id": "-O_fvQysnSl9b-jdTbyj",
+      "method": "SYSTEM",
+      "success": true,
+      "timestamp": 1758452367396
+    },
+    "-O_fvRVmBZ-t6TzNwjzk": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvRVmBZ-t6TzNwjzk",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452369566
+    },
+    "-O_fvRvVUd6YiVhqNXyK": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":680701,\"currentTimeMs\":681425,\"timeSinceUpdateMs\":724}",
+      "deviceId": "3",
+      "endpoint": "/api/parking/3",
+      "id": "-O_fvRvVUd6YiVhqNXyK",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452371276
+    },
+    "-O_fvSFWT8TldLU_YuOd": {
+      "body": "{\"distance\":150,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":687002,\"timeSinceUpdateMs\":963}",
+      "deviceId": "3",
+      "endpoint": "/api/parking/sensor/3",
+      "id": "-O_fvSFWT8TldLU_YuOd",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452372621
+    },
+    "-O_fvS_C15WFu1KivYt6": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":688787,\"currentTimeMs\":689309,\"timeSinceUpdateMs\":522}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/4",
+      "id": "-O_fvS_C15WFu1KivYt6",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452373945
+    },
+    "-O_fvSvPoBMV0hN3FIRf": {
+      "body": "{\"distance\":146,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":688787,\"timeSinceUpdateMs\":1947}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/sensor/4",
+      "id": "-O_fvSvPoBMV0hN3FIRf",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452375366
+    },
+    "-O_fvTF8GlhORTOXcvIe": {
+      "body": "{\"deviceId\":\"master\",\"systemStatus\":\"online\",\"wifiConnected\":true,\"slaveDevices\":4}",
+      "deviceId": "master",
+      "endpoint": "/api/parking/health",
+      "id": "-O_fvTF8GlhORTOXcvIe",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452376693
+    },
+    "-O_fvTN_7hoOl27BvWkJ": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvTN_7hoOl27BvWkJ",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452377233
+    },
+    "-O_fvTa1infZscXI2ghq": {
+      "body": "{\"deviceId\":\"master\",\"systemStatus\":\"online\",\"wifiConnected\":true,\"slaveDevices\":4}",
+      "deviceId": "master",
+      "endpoint": "/api/parking/health",
+      "id": "-O_fvTa1infZscXI2ghq",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452378094
+    },
+    "-O_fvTa9qs2KuLG8XSpw": {
+      "body": "{\"Devicemaster/isOnline\":false}",
+      "deviceId": "system",
+      "endpoint": "deviceStatus/update",
+      "id": "-O_fvTa9qs2KuLG8XSpw",
+      "method": "SYSTEM",
+      "success": true,
+      "timestamp": 1758452378102
+    },
+    "-O_fvTl_vzYAxbrkNfc2": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-O_fvTl_vzYAxbrkNfc2",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452378833
+    },
+    "-O_fvTuweupDBBcRxJof": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":694710,\"currentTimeMs\":694783,\"timeSinceUpdateMs\":73}",
+      "deviceId": "1",
+      "endpoint": "/api/parking/1",
+      "id": "-O_fvTuweupDBBcRxJof",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452379432
+    },
+    "-O_fvTz8fVe1_CHeMVe2": {
+      "body": "{\"Devicemaster/isOnline\":false}",
+      "deviceId": "system",
+      "endpoint": "deviceStatus/update",
+      "id": "-O_fvTz8fVe1_CHeMVe2",
+      "method": "SYSTEM",
+      "success": true,
+      "timestamp": 1758452379701
+    },
+    "-O_fvUF2jbjIH2NgnQzm": {
+      "body": "{\"distance\":148,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":694710,\"timeSinceUpdateMs\":1448}",
+      "deviceId": "1",
+      "endpoint": "/api/parking/sensor/1",
+      "id": "-O_fvUF2jbjIH2NgnQzm",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452380783
+    },
+    "-O_fvUZHEMOQEjay4kHr": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":697367,\"currentTimeMs\":697447,\"timeSinceUpdateMs\":80}",
+      "deviceId": "2",
+      "endpoint": "/api/parking/2",
+      "id": "-O_fvUZHEMOQEjay4kHr",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452382078
+    },
+    "-O_fvUt5vxF70dZXrQBC": {
+      "body": "{\"distance\":155,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":697367,\"timeSinceUpdateMs\":1404}",
+      "deviceId": "2",
+      "endpoint": "/api/parking/sensor/2",
+      "id": "-O_fvUt5vxF70dZXrQBC",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452383410
+    },
+    "-O_fvVDUQdMJZB5SaSvn": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":698740,\"currentTimeMs\":700168,\"timeSinceUpdateMs\":1428}",
+      "deviceId": "3",
+      "endpoint": "/api/parking/3",
+      "id": "-O_fvVDUQdMJZB5SaSvn",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452384778
+    },
+    "-O_fvVYCdKKN62xw1iaq": {
+      "body": "{\"distance\":150,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":700763,\"timeSinceUpdateMs\":725}",
+      "deviceId": "3",
+      "endpoint": "/api/parking/sensor/3",
+      "id": "-O_fvVYCdKKN62xw1iaq",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452386105
+    },
+    "-O_fvVsXJLCzX7fTN85z": {
+      "body": "{\"parkingStatus\":\"open\",\"sensorError\":false,\"systemStatus\":\"online\",\"lastUpdateMs\":700767,\"currentTimeMs\":702845,\"timeSinceUpdateMs\":2078}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/4",
+      "id": "-O_fvVsXJLCzX7fTN85z",
+      "method": "PUT",
+      "success": true,
+      "timestamp": 1758452387470
+    },
+    "-O_fvWBlmeEX-xRaPwr9": {
+      "body": "{\"distance\":147,\"hasSensorError\":false,\"isOffline\":false,\"lastUpdateMs\":702846,\"timeSinceUpdateMs\":1299}",
+      "deviceId": "4",
+      "endpoint": "/api/parking/sensor/4",
+      "id": "-O_fvWBlmeEX-xRaPwr9",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452388765
+    },
+    "-O_fvWWCzTxuTz_KZCj9": {
+      "body": "{\"deviceId\":\"master\",\"systemStatus\":\"online\",\"wifiConnected\":true,\"slaveDevices\":4}",
+      "deviceId": "master",
+      "endpoint": "/api/parking/health",
+      "id": "-O_fvWWCzTxuTz_KZCj9",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1758452390073
+    },
+    "-ObJY62IWwPU3C30HawF": {
+      "body": "{\"Device1/lastSeen\":\"2025-10-11T18:33:17.673Z\",\"Device2/lastSeen\":\"2025-10-11T18:33:17.673Z\",\"Device3/lastSeen\":\"2025-10-11T18:33:17.673Z\",\"Device4/lastSeen\":\"2025-10-11T18:33:17.673Z\"}",
+      "deviceId": "system",
+      "endpoint": "deviceStatus/update",
+      "id": "-ObJY62IWwPU3C30HawF",
+      "method": "SYSTEM",
+      "success": true,
+      "timestamp": 1760207597895
+    },
+    "-ObJY9Z-2UXFrEbXTtbz": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-ObJY9Z-2UXFrEbXTtbz",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1760207612157
+    },
+    "-ObJYKV1JjqOH5PvYBDR": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/status/update",
+      "id": "-ObJYKV1JjqOH5PvYBDR",
+      "method": "POST",
+      "success": true,
+      "timestamp": 1760207657069
+    },
+    "-ObQOm4Gdl0Du613DGnO": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/mappings",
+      "id": "-ObQOm4Gdl0Du613DGnO",
+      "method": "GET",
+      "success": true,
+      "timestamp": 1760322593226
+    },
+    "-ObQOm95QWsV_7MY7vl4": {
+      "body": "{}",
+      "deviceId": "system",
+      "endpoint": "/api/parking/config/threshold",
+      "id": "-ObQOm95QWsV_7MY7vl4",
+      "method": "GET",
+      "success": true,
+      "timestamp": 1760322593535
+    }
+  },
+  "users": {
+    "Armaan": {
+      "createdAt": 1760210130678,
+      "isAdmin": false,
+      "lastLogin": 1760322564258,
+      "passwordHash": "ee6bfe6147907c1db8f40c297331a2b8c937aa83269ca98218a98565224deaa2",
+      "salt": "c4f747f70dc673705976f19b898f7b3c",
+      "username": "Armaan"
+    },
+    "admin": {
+      "createdAt": 1760210110489,
+      "isAdmin": true,
+      "lastLogin": 1760210117670,
+      "passwordHash": "ed7f76dab0aa920669ca6194e839254d53f9ede050332005d5a0bdddb6d71e2e",
+      "salt": "d541434d8898eada2b2349090ee4723f",
+      "username": "admin"
+    }
+  }
+}

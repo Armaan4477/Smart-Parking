@@ -11,7 +11,7 @@ This smart parking system consists of:
 3. **Next.js API Server**: Receives data from ESP32 and updates Firebase
 4. **Firebase Realtime Database**: Stores parking space status
 5. **Next.js Frontend** (future): Web interface to visualize parking data
-test
+
 ## Directory Structure
 
 ```

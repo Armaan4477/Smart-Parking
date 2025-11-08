@@ -3,6 +3,10 @@
 #include <ArduinoJson.h>
 #include <WiFiUdp.h>
 
+// Function declarations
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+void sendDistanceReading();
+
 const char* ssid = "Free Public Wi-Fi";
 const char* password = "2A0R0M4AAN";
 
@@ -10,12 +14,34 @@ String masterIP = "";
 int masterPort = 81;
 bool masterDiscovered = false;
 
+// Moving average filter variables for stabilizing readings
+#define READING_SAMPLES 3  // Number of samples to average
+int distanceReadings[READING_SAMPLES];  // Array to store readings
+int readingIndex = 0;      // Current position in the array
+int readingSum = 0;        // Sum of the readings
+bool filterInitialized = false; // Flag to track if the filter has been initialized
+
+// Debouncing variables for stable state changes
+#define STATE_DEBOUNCE_COUNT 2  // Number of consistent readings needed to change state
+bool currentOccupiedState = false;  // Current debounced state (true = occupied)
+int occupiedStateCount = 0;      // Counter for consecutive occupied readings
+int availableStateCount = 0;     // Counter for consecutive available readings
+
+int distanceThreshold = 0;
+bool thresholdConfigured = false;
+unsigned long lastThresholdUpdate = 0;
+
 WiFiUDP udp;
 const int UDP_PORT = 4210;
 const char* DISCOVERY_MESSAGE = "SMART_PARKING";
 
 const unsigned long DISCOVERY_TIMEOUT = 60000;
 unsigned long discoveryStartTime = 0;
+
+// Delay before starting discovery after connecting to WiFi
+const unsigned long STARTUP_DELAY = 30000;
+unsigned long startupTime = 0;
+bool startupDelayComplete = false;
 
 String deviceMAC = "";
 int deviceID = -1;
@@ -38,6 +64,17 @@ unsigned long disconnectionStartTime = 0;
 bool sensorError = false;
 
 bool listenForDiscovery(unsigned long timeout) {
+  // Make sure startup delay is complete before listening for discovery
+  if (!startupDelayComplete) {
+    unsigned long currentTime = millis();
+    if (currentTime - startupTime < STARTUP_DELAY) {
+      Serial.println("Cannot start discovery yet - still in startup delay period");
+      return false;
+    } else {
+      startupDelayComplete = true;
+    }
+  }
+
   unsigned long startTime = millis();
   Serial.println("Listening for master discovery broadcast...");
 
@@ -145,8 +182,10 @@ void setup() {
 
   pinMode(RED_LED_PIN, OUTPUT);
   pinMode(GREEN_LED_PIN, OUTPUT);
+  
   digitalWrite(RED_LED_PIN, LOW);
   digitalWrite(GREEN_LED_PIN, LOW);
+  Serial.println("LEDs turned off until connection with master is established");
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -166,14 +205,14 @@ void setup() {
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-
-  discoveryStartTime = millis();
-  if (listenForDiscovery(DISCOVERY_TIMEOUT)) {
-    connectToWebSocket();
-  } else {
-    Serial.println("No master found, will keep trying");
-  }
-
+  
+  // Set startup time and initialize startup delay
+  startupTime = millis();
+  startupDelayComplete = false;
+  Serial.printf("Waiting %d seconds before starting discovery...\n", STARTUP_DELAY / 1000);
+  
+  // We'll start discovery after the delay in the loop function
+  
   Serial.println("Setup complete");
 }
 
@@ -182,6 +221,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_DISCONNECTED:
       Serial.println("Disconnected from WebSocket server");
 
+      thresholdConfigured = false;
+      
       if (!sensorError) {
         digitalWrite(RED_LED_PIN, LOW);
         digitalWrite(GREEN_LED_PIN, LOW);
@@ -189,6 +230,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         digitalWrite(RED_LED_PIN, HIGH);
         delay(100);
         digitalWrite(RED_LED_PIN, LOW);
+        
+        Serial.println("LEDs turned off due to disconnection");
       }
 
       if (disconnectionStartTime == 0) {
@@ -204,6 +247,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         disconnectionStartTime = 0;
 
         if (!sensorError) {
+          digitalWrite(RED_LED_PIN, LOW);
+          
           digitalWrite(GREEN_LED_PIN, HIGH);
           delay(100);
           digitalWrite(GREEN_LED_PIN, LOW);
@@ -242,6 +287,17 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           int newId = doc["assigned_id"];
           deviceID = newId;
           Serial.printf("Master assigned ID: %d to this device\n", deviceID);
+          
+          if (doc.containsKey("threshold")) {
+            int newThreshold = doc["threshold"];
+            if (newThreshold > 0) {
+              distanceThreshold = newThreshold;
+              thresholdConfigured = true;
+              Serial.printf("Received valid distance threshold: %d cm\n", distanceThreshold);
+            } else {
+              Serial.println("Received invalid threshold value (0 or negative). Waiting for valid threshold.");
+            }
+          }
 
           sendDistanceReading();
           return;
@@ -284,23 +340,61 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           return;
         }
 
-        if (doc.containsKey("id")) {
+        if (doc.containsKey("threshold") && doc.containsKey("id")) {
+          int receivedId = doc["id"];
+          if (receivedId == deviceID) {
+            int newThreshold = doc["threshold"];
+            if (newThreshold > 0) {
+              if (distanceThreshold != newThreshold) {
+                distanceThreshold = newThreshold;
+                thresholdConfigured = true;
+                lastThresholdUpdate = millis();
+                
+                Serial.printf("Updated distance threshold: %d cm\n", distanceThreshold);
+                
+                DynamicJsonDocument confirmDoc(256);
+                confirmDoc["type"] = "threshold_confirm";
+                confirmDoc["id"] = deviceID;
+                confirmDoc["threshold"] = distanceThreshold;
+                confirmDoc["mac"] = deviceMAC;
+                
+                String confirmJson;
+                serializeJson(confirmDoc, confirmJson);
+                webSocket.sendTXT(confirmJson);
+                
+                Serial.println("Sent threshold confirmation to master");
+              } else {
+                Serial.printf("Threshold already set to %d cm, no change needed\n", distanceThreshold);
+              }
+              
+              if (thresholdConfigured && !sensorError && distance > 0) {
+                bool isOccupied = (distance <= distanceThreshold);
+                digitalWrite(RED_LED_PIN, isOccupied ? HIGH : LOW);
+                digitalWrite(GREEN_LED_PIN, isOccupied ? LOW : HIGH);
+                Serial.println(isOccupied ? "Updated to OCCUPIED (red LED on)" : "Updated to AVAILABLE (green LED on)");
+              }
+            } else {
+              Serial.println("Received invalid threshold value (0 or negative). Ignoring update.");
+            }
+          }
+        }
+        
+        else if (doc.containsKey("id") && doc.containsKey("led") && doc.containsKey("override")) {
           int receivedId = doc["id"];
           if (receivedId == deviceID) {
             String ledStatus = doc["led"];
-
-            if (!sensorError) {
+            bool isOverride = doc["override"];
+            
+            if (isOverride && !sensorError) {
               if (ledStatus == "red") {
                 digitalWrite(RED_LED_PIN, HIGH);
                 digitalWrite(GREEN_LED_PIN, LOW);
-                Serial.println("Setting RED LED ON (spot occupied)");
+                Serial.println("OVERRIDE: Setting RED LED ON (spot occupied)");
               } else if (ledStatus == "green") {
                 digitalWrite(RED_LED_PIN, LOW);
                 digitalWrite(GREEN_LED_PIN, HIGH);
-                Serial.println("Setting GREEN LED ON (spot available)");
+                Serial.println("OVERRIDE: Setting GREEN LED ON (spot available)");
               }
-            } else {
-              Serial.println("Ignoring LED command due to sensor error");
             }
           }
         }
@@ -314,6 +408,7 @@ int sensorErrorCount = 0;
 unsigned long lastSensorErrorFlash = 0;
 const unsigned long ERROR_FLASH_INTERVAL = 300;
 
+// Function to get a filtered distance reading
 int readDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
@@ -343,8 +438,37 @@ int readDistance() {
   if (calculatedDistance > 200) {
     calculatedDistance = 200;
   }
-
-  return calculatedDistance;
+  
+  // Apply moving average filter
+  // First, subtract the old reading from the sum (if filter is initialized)
+  if (filterInitialized) {
+    readingSum = readingSum - distanceReadings[readingIndex];
+  } else {
+    // If this is first time, initialize all readings with the current value
+    for (int i = 0; i < READING_SAMPLES; i++) {
+      distanceReadings[i] = calculatedDistance;
+    }
+    readingSum = calculatedDistance * READING_SAMPLES;
+    filterInitialized = true;
+  }
+  
+  // Add new reading to the sum and store in array
+  readingSum = readingSum + calculatedDistance;
+  distanceReadings[readingIndex] = calculatedDistance;
+  
+  // Move to next position in circular buffer
+  readingIndex = (readingIndex + 1) % READING_SAMPLES;
+  
+  // Calculate average
+  int filteredDistance = readingSum / READING_SAMPLES;
+  
+  Serial.print("Raw distance: "); 
+  Serial.print(calculatedDistance);
+  Serial.print(" cm, Filtered: ");
+  Serial.print(filteredDistance);
+  Serial.println(" cm");
+  
+  return filteredDistance;
 }
 
 void sendDistanceReading() {
@@ -371,10 +495,65 @@ void sendDistanceReading() {
 
       Serial.println("Sent sensor error notification to master");
     } else {
+      bool rawOccupiedState = false;
+      bool reportedOccupiedState = currentOccupiedState; // Default to current stable state
+      
+      if (thresholdConfigured) {
+        // Determine the raw state based on the filtered distance reading
+        rawOccupiedState = (distance <= distanceThreshold && distance > 0);
+        
+        // Apply debounce logic for state changes
+        if (rawOccupiedState) {
+          // Object detected - increment occupied counter, reset available counter
+          occupiedStateCount++;
+          availableStateCount = 0;
+          
+          // If we have enough consecutive occupied readings, change state
+          if (occupiedStateCount >= STATE_DEBOUNCE_COUNT && !currentOccupiedState) {
+            currentOccupiedState = true;
+            reportedOccupiedState = true;
+            Serial.println("State change debounced: Now OCCUPIED");
+          }
+        } else {
+          // No object detected - increment available counter, reset occupied counter
+          availableStateCount++;
+          occupiedStateCount = 0;
+          
+          // If we have enough consecutive available readings, change state
+          if (availableStateCount >= STATE_DEBOUNCE_COUNT && currentOccupiedState) {
+            currentOccupiedState = false;
+            reportedOccupiedState = false;
+            Serial.println("State change debounced: Now AVAILABLE");
+          }
+        }
+        
+        if (!sensorError) {
+          digitalWrite(RED_LED_PIN, reportedOccupiedState ? HIGH : LOW);
+          digitalWrite(GREEN_LED_PIN, reportedOccupiedState ? LOW : HIGH);
+        }
+        
+        Serial.print("Raw state: ");
+        Serial.print(rawOccupiedState ? "OCCUPIED" : "AVAILABLE");
+        Serial.print(", Debounced state: ");
+        Serial.println(reportedOccupiedState ? "OCCUPIED (red LED on)" : "AVAILABLE (green LED on)");
+        Serial.printf("Debounce counters - Occupied: %d, Available: %d\n", occupiedStateCount, availableStateCount);
+      } else {
+        if (!sensorError) {
+          digitalWrite(RED_LED_PIN, LOW);
+          digitalWrite(GREEN_LED_PIN, LOW);
+        }
+        Serial.println("Threshold not configured yet. LEDs turned off.");
+      }
+
       DynamicJsonDocument doc(256);
       doc["id"] = deviceID;
       doc["mac"] = deviceMAC;
       doc["distance"] = distance;
+      
+      if (thresholdConfigured) {
+        doc["isOccupied"] = reportedOccupiedState; // Use the debounced state
+        doc["threshold"] = distanceThreshold;
+      }
 
       String jsonString;
       serializeJson(doc, jsonString);
@@ -382,7 +561,8 @@ void sendDistanceReading() {
 
       Serial.print("Sent distance reading: ");
       Serial.print(distance);
-      Serial.println(" cm");
+      Serial.print(" cm, Debounced Occupied: ");
+      Serial.println(reportedOccupiedState ? "yes" : "no");
     }
   } else {
     Serial.println("Not connected to WebSocket server, cannot send reading");
@@ -397,6 +577,30 @@ const unsigned long MAX_DISCONNECTION_TIME = 10000;
 
 void loop() {
   unsigned long currentTime = millis();
+
+  // Check if startup delay is complete before attempting to discover master
+  if (!startupDelayComplete) {
+    if (currentTime - startupTime >= STARTUP_DELAY) {
+      startupDelayComplete = true;
+      Serial.println("Startup delay complete! Starting discovery process...");
+      
+      // Start the discovery process
+      discoveryStartTime = currentTime;
+      if (listenForDiscovery(DISCOVERY_TIMEOUT)) {
+        connectToWebSocket();
+      } else {
+        Serial.println("No master found, will keep trying");
+      }
+    } else {
+      // Print status message every 5 seconds during startup delay
+      unsigned long remainingTime = STARTUP_DELAY - (currentTime - startupTime);
+      if (currentTime % 5000 < 100) {
+        Serial.printf("Startup delay in progress. %lu seconds remaining...\n", remainingTime / 1000);
+      }
+      delay(100); // Small delay to avoid flooding the serial console
+      return; // Skip the rest of the loop during startup delay
+    }
+  }
 
   if (sensorError) {
     if (currentTime - lastSensorErrorFlash >= ERROR_FLASH_INTERVAL) {
@@ -423,6 +627,15 @@ void loop() {
         if (disconnectionStartTime == 0) {
           disconnectionStartTime = currentTime;
           Serial.println("Starting disconnection timer");
+        }
+        
+        if (wasConnected) {
+          thresholdConfigured = false;
+          
+          if (!sensorError) {
+            digitalWrite(RED_LED_PIN, LOW);
+            digitalWrite(GREEN_LED_PIN, LOW);
+          }
         }
       }
       wasConnected = isConnected;
@@ -463,8 +676,12 @@ void loop() {
     if (isConnected && (currentTime - lastReadingTime >= READ_INTERVAL)) {
       sendDistanceReading();
       lastReadingTime = currentTime;
+      
+      if (!thresholdConfigured && (currentTime % 10000 < 100)) { // Log roughly every 10 seconds
+        Serial.println("Connected to master but no valid threshold configured yet.");
+      }
     }
-  } else if (currentTime - lastDiscoveryCheck >= DISCOVERY_CHECK_INTERVAL) {
+  } else if (startupDelayComplete && (currentTime - lastDiscoveryCheck >= DISCOVERY_CHECK_INTERVAL)) {
     Serial.println("Looking for master discovery broadcast...");
     lastDiscoveryCheck = currentTime;
 

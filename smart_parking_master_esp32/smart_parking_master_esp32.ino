@@ -30,16 +30,25 @@ unsigned long lastHealthPingTime = 0;
 WebSocketsServer webSocket = WebSocketsServer(81, "", "arduino");
 AsyncWebServer server(80);
 
-const int DISTANCE_THRESHOLD = 8;
 const int MAX_DISTANCE = 200;
-const unsigned long SYNC_INTERVAL = 2000;
-const unsigned long API_SYNC_INTERVAL = 4000;
+const unsigned long SYNC_INTERVAL = 4000;
+const unsigned long API_SYNC_INTERVAL = 6000;
+const unsigned long THRESHOLD_CHECK_INTERVAL = 60000;
+
+int distanceThreshold = 45;
+bool thresholdUpdated = false;
+unsigned long lastThresholdCheckTime = 0;
 
 const unsigned long DISCOVERY_DURATION = 60000;
 const unsigned long DISCOVERY_INTERVAL = 5000;
 unsigned long discoveryStartTime = 0;
 unsigned long lastDiscoveryTime = 0;
 bool discoveryMode = false;
+
+// Delay before starting discovery after connecting to WiFi
+const unsigned long STARTUP_DELAY = 30000;
+unsigned long startupTime = 0;
+bool startupDelayComplete = false;
 
 const unsigned long OFFLINE_DETECTION_WINDOW = 8000;
 const unsigned long DEVICE_OFFLINE_TIMEOUT = 20000;
@@ -73,6 +82,10 @@ void sendSensorDataToApi(int spotIndex, int distance, bool hasSensorError);
 bool makeApiRequest(String endpoint, String method, String payload = "");
 void syncWithApi();
 void sendHealthPing();
+void fetchThresholdFromApi();
+void updateThresholdForAllSlaves();
+void storeThresholdValue(int value);
+void syncDeviceMappingsWithApi();
 
 TaskHandle_t SlaveComTask;
 TaskHandle_t SyncTask;
@@ -96,42 +109,78 @@ int findParkingSpotByMac(String macAddress) {
   return -1;
 }
 
+void storeThresholdValue(int value) {
+  if (value > 0 && value <= MAX_DISTANCE) {
+    preferences.putInt("threshold", value);
+    Serial.printf("Stored threshold value in ROM: %d cm\n", value);
+  }
+}
+
+int loadThresholdValue() {
+  int storedThreshold = preferences.getInt("threshold", 0);
+  
+  if (storedThreshold > 0 && storedThreshold <= MAX_DISTANCE) {
+    Serial.printf("Loaded threshold value from ROM: %d cm\n", storedThreshold);
+    return storedThreshold;
+  } else {
+    Serial.printf("No valid threshold in ROM, using fallback value: 45 cm\n");
+    return 45;
+  }
+}
+
 void loadDeviceMappings() {
+  // Try to sync with API first
+  if (WiFi.status() == WL_CONNECTED) {
+    syncDeviceMappingsWithApi();
+  }
+  
+  // Load from local storage as fallback
   nextAvailableId = preferences.getInt("next_id", 1);
   int storedConnectedSpots = preferences.getInt("num_spots", 0);
 
   Serial.printf("Loaded nextAvailableId: %d, stored spots: %d\n", nextAvailableId, storedConnectedSpots);
 
-  for (int i = 0; i < MAX_SPOTS; i++) {
-    String idStr = String(i + 1);
-    String macKey = "mac_" + idStr;
+  // Skip local loading if we already have devices from API sync
+  if (connectedSpots == 0) {
+    for (int i = 0; i < MAX_SPOTS; i++) {
+      String idStr = String(i + 1);
+      String macKey = "mac_" + idStr;
 
-    String storedMac = preferences.getString(macKey.c_str(), "");
+      String storedMac = preferences.getString(macKey.c_str(), "");
 
-    if (storedMac.length() > 0) {
-      Serial.printf("Found stored device: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
+      if (storedMac.length() > 0) {
+        Serial.printf("Found stored device: ID %d -> MAC %s\n", i + 1, storedMac.c_str());
 
-      if (connectedSpots < MAX_SPOTS) {
-        parkingSpots[connectedSpots].id = i + 1;
-        parkingSpots[connectedSpots].macAddress = storedMac;
-        parkingSpots[connectedSpots].distance = 0;
-        parkingSpots[connectedSpots].isOccupied = false;
-        parkingSpots[connectedSpots].lastUpdate = millis() - 20000;
-        parkingSpots[connectedSpots].hasSensorError = false;
-        connectedSpots++;
+        if (connectedSpots < MAX_SPOTS) {
+          parkingSpots[connectedSpots].id = i + 1;
+          parkingSpots[connectedSpots].macAddress = storedMac;
+          parkingSpots[connectedSpots].distance = 0;
+          parkingSpots[connectedSpots].isOccupied = false;
+          parkingSpots[connectedSpots].lastUpdate = millis() - 20000;
+          parkingSpots[connectedSpots].hasSensorError = false;
+          parkingSpots[connectedSpots].syncedWithApi = false; // Ensure it needs to sync with API
+          connectedSpots++;
 
-        Serial.printf("Restored device mapping: ID %d -> MAC %s (slot %d)\n",
-                      i + 1, storedMac.c_str(), connectedSpots - 1);
+          Serial.printf("Restored device mapping from local storage: ID %d -> MAC %s (slot %d)\n",
+                        i + 1, storedMac.c_str(), connectedSpots - 1);
+        }
       }
     }
+
+    Serial.printf("Loaded %d device mappings from local storage\n", connectedSpots);
   }
 
-  Serial.printf("Loaded %d device mappings from EEPROM\n", connectedSpots);
-
+  // Always recalculate nextAvailableId based on loaded devices to ensure accuracy
+  int highestId = 0;
   for (int i = 0; i < connectedSpots; i++) {
-    if (parkingSpots[i].id >= nextAvailableId) {
-      nextAvailableId = parkingSpots[i].id + 1;
+    if (parkingSpots[i].id > highestId) {
+      highestId = parkingSpots[i].id;
     }
+  }
+  
+  // Ensure nextAvailableId is always one more than the highest assigned ID
+  if (highestId > 0) {
+    nextAvailableId = highestId + 1;
   }
 
   if (nextAvailableId != preferences.getInt("next_id", 1)) {
@@ -140,7 +189,128 @@ void loadDeviceMappings() {
   }
 }
 
+// Function to synchronize device mappings with the API
+void syncDeviceMappingsWithApi() {
+  HTTPClient http;
+  String apiUrl = String(API_BASE_URL) + "/api/parking/mappings";
+  
+  Serial.println("Syncing device mappings with API...");
+  
+  http.begin(apiUrl);
+  int httpResponseCode = http.GET();
+  
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    
+    DynamicJsonDocument jsonDoc(4096);  // Make sure this is large enough for your number of devices
+    DeserializationError error = deserializeJson(jsonDoc, response);
+    
+    if (!error) {
+      bool success = jsonDoc["success"];
+      
+      if (success && jsonDoc.containsKey("mappings")) {
+        // Create a temporary array to store device mappings from API
+        struct TempMapping {
+          int deviceId;
+          String macAddress;
+          bool found;
+        };
+        
+        TempMapping tempMappings[MAX_SPOTS];
+        int apiDeviceCount = 0;
+        
+        // Parse mappings from API
+        JsonArray mappings = jsonDoc["mappings"];
+        for (JsonObject mapping : mappings) {
+          String macAddress = mapping["macAddress"].as<String>();
+          int deviceId = mapping["deviceId"];
+          
+          if (apiDeviceCount < MAX_SPOTS) {
+            tempMappings[apiDeviceCount].deviceId = deviceId;
+            tempMappings[apiDeviceCount].macAddress = macAddress;
+            tempMappings[apiDeviceCount].found = false;
+            apiDeviceCount++;
+          }
+        }
+        
+        Serial.printf("Retrieved %d device mappings from API\n", apiDeviceCount);
+        
+        // On first run, we trust the API completely since we have no connected slaves
+        if (connectedSpots == 0) {
+          Serial.println("No local devices connected, using API data as source of truth");
+          
+          for (int i = 0; i < apiDeviceCount && i < MAX_SPOTS; i++) {
+            parkingSpots[i].id = tempMappings[i].deviceId;
+            parkingSpots[i].macAddress = tempMappings[i].macAddress;
+            parkingSpots[i].distance = 0;
+            parkingSpots[i].isOccupied = false;
+            parkingSpots[i].lastUpdate = millis() - 30000; // Mark as not recently updated
+            parkingSpots[i].hasSensorError = false;
+            parkingSpots[i].syncedWithApi = false;  // Don't auto-initialize with Firebase until slave connects
+            
+            // Store mapping locally
+            saveDeviceMapping(tempMappings[i].deviceId, tempMappings[i].macAddress);
+            
+            Serial.printf("Loaded API mapping: ID %d -> MAC %s (slot %d)\n",
+                        tempMappings[i].deviceId, tempMappings[i].macAddress.c_str(), i);
+          }
+          
+          connectedSpots = apiDeviceCount;
+        } else {
+          // If we have connected spots, we only update our understanding of mappings
+          // but don't immediately add devices that aren't actually connected
+          Serial.println("We have local devices, carefully merging with API data");
+          
+          // Update mappings for existing devices
+          for (int i = 0; i < connectedSpots; i++) {
+            for (int j = 0; j < apiDeviceCount; j++) {
+              if (parkingSpots[i].macAddress == tempMappings[j].macAddress) {
+                // If we find a MAC match but ID mismatch, update our ID to match API
+                if (parkingSpots[i].id != tempMappings[j].deviceId) {
+                  Serial.printf("Updating device ID for MAC %s: %d -> %d\n",
+                              parkingSpots[i].macAddress.c_str(), 
+                              parkingSpots[i].id, 
+                              tempMappings[j].deviceId);
+                  
+                  parkingSpots[i].id = tempMappings[j].deviceId;
+                }
+                
+                tempMappings[j].found = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Update nextAvailableId based on API data
+        if (jsonDoc.containsKey("nextId")) {
+          int apiNextId = jsonDoc["nextId"];
+          
+          // Only update if the API nextId is higher than our current one
+          if (apiNextId > nextAvailableId) {
+            nextAvailableId = apiNextId;
+            preferences.putInt("next_id", nextAvailableId);
+            Serial.printf("Updated nextAvailableId to %d from API\n", nextAvailableId);
+          } else {
+            Serial.printf("Keeping local nextAvailableId: %d (API: %d)\n", nextAvailableId, apiNextId);
+          }
+        }
+      } else {
+        Serial.println("API response doesn't contain device mappings data");
+      }
+    } else {
+      Serial.printf("Failed to parse API response: %s\n", error.c_str());
+    }
+  } else {
+    Serial.printf("API request failed with status code: %d\n", httpResponseCode);
+  }
+  
+  http.end();
+}
+
 void saveDeviceMapping(int id, String macAddress) {
+  // For compatibility with old code, we'll keep the local storage logic
+  // but this is redundant with the API-based registration
   String idStr = String(id);
   String macKey = "mac_" + idStr;
 
@@ -153,7 +323,7 @@ void saveDeviceMapping(int id, String macAddress) {
 
   preferences.putInt("num_spots", connectedSpots);
 
-  Serial.printf("Saved device mapping: ID %d -> MAC %s\n", id, macAddress.c_str());
+  Serial.printf("Saved device mapping locally: ID %d -> MAC %s\n", id, macAddress.c_str());
 }
 
 void removeDeviceMapping(int id) {
@@ -173,34 +343,140 @@ void removeDeviceMapping(int id) {
   }
 }
 
-int registerDevice(String macAddress, int requestedId) {
+int registerDeviceViaAPI(String macAddress) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot register device via API: WiFi not connected");
+    // Fallback to local registration if API is not available
+    return registerDeviceLocally(macAddress, 0);
+  }
+
+  HTTPClient http;
+  String apiUrl = String(API_BASE_URL) + "/api/parking/register/" + macAddress;
+  
+  Serial.printf("Registering device with MAC %s via API\n", macAddress.c_str());
+  
+  http.begin(apiUrl);
+  http.addHeader("Content-Type", "application/json");
+  int httpResponseCode = http.POST("");
+  
+  if (httpResponseCode == 200 || httpResponseCode == 201) {
+    String response = http.getString();
+    
+    DynamicJsonDocument jsonDoc(1024);
+    DeserializationError error = deserializeJson(jsonDoc, response);
+    
+    if (!error) {
+      bool success = jsonDoc["success"];
+      int deviceId = jsonDoc["deviceId"];
+      bool isNewDevice = jsonDoc["isNewDevice"];
+      
+      if (success && deviceId > 0) {
+        Serial.printf("API assigned ID %d for device with MAC %s (new device: %s)\n", 
+                      deviceId, macAddress.c_str(), isNewDevice ? "yes" : "no");
+        return deviceId;
+      } else {
+        Serial.println("API response didn't contain valid device ID");
+      }
+    } else {
+      Serial.printf("Failed to parse API response: %s\n", error.c_str());
+    }
+  } else {
+    Serial.printf("API request failed with status code: %d\n", httpResponseCode);
+  }
+  
+  http.end();
+  
+  // If API registration fails, fall back to local registration
+  Serial.println("Falling back to local device registration");
+  return registerDeviceLocally(macAddress, 0);
+}
+
+// Renamed the original function to clearly indicate it's local registration
+int registerDeviceLocally(String macAddress, int requestedId) {
   int existingSpotIndex = findParkingSpotByMac(macAddress);
 
   if (existingSpotIndex >= 0) {
     int existingId = parkingSpots[existingSpotIndex].id;
-    Serial.printf("Device with MAC %s already registered as ID %d\n", macAddress.c_str(), existingId);
+    Serial.printf("Device with MAC %s already registered locally as ID %d\n", macAddress.c_str(), existingId);
     return existingId;
   }
 
   if (requestedId > 0 && requestedId <= MAX_SPOTS) {
     if (findParkingSpotById(requestedId) == -1) {
-      Serial.printf("Using requested ID %d for device with MAC %s\n", requestedId, macAddress.c_str());
+      Serial.printf("Using requested ID %d for device with MAC %s (local)\n", requestedId, macAddress.c_str());
+      
+      // Ensure nextAvailableId stays ahead of manually assigned IDs
+      if (requestedId >= nextAvailableId) {
+        nextAvailableId = requestedId + 1;
+        preferences.putInt("next_id", nextAvailableId);
+        Serial.printf("Updated nextAvailableId to %d after manual assignment\n", nextAvailableId);
+      }
+      
       return requestedId;
     }
   }
 
+  // Use the nextAvailableId variable directly instead of scanning
+  if (nextAvailableId <= MAX_SPOTS && findParkingSpotById(nextAvailableId) == -1) {
+    int assignedId = nextAvailableId;
+    
+    // Increment nextAvailableId and save it
+    nextAvailableId++;
+    preferences.putInt("next_id", nextAvailableId);
+    
+    Serial.printf("Assigning nextAvailableId %d to device with MAC %s (local)\n", assignedId, macAddress.c_str());
+    Serial.printf("Updated nextAvailableId to %d\n", nextAvailableId);
+    
+    return assignedId;
+  }
+  
+  // Fall back to scanning for any available ID if nextAvailableId is not valid
   for (int i = 1; i <= MAX_SPOTS; i++) {
     if (findParkingSpotById(i) == -1) {
-      Serial.printf("Assigning next available ID %d to device with MAC %s\n", i, macAddress.c_str());
+      Serial.printf("Assigning fallback ID %d to device with MAC %s (local)\n", i, macAddress.c_str());
+      
+      // Update nextAvailableId to be one more than this assigned ID
+      if (i >= nextAvailableId) {
+        nextAvailableId = i + 1;
+        preferences.putInt("next_id", nextAvailableId);
+        Serial.printf("Updated nextAvailableId to %d after fallback assignment\n", nextAvailableId);
+      }
+      
       return i;
     }
   }
 
-  Serial.printf("ERROR: No available IDs for device with MAC %s\n", macAddress.c_str());
+  Serial.printf("ERROR: No available IDs for device with MAC %s (local)\n", macAddress.c_str());
   return -1;
 }
 
+// This is the main registration function that will be called by the rest of the code
+int registerDevice(String macAddress, int requestedId) {
+  // Try API registration first, fall back to local if needed
+  return registerDeviceViaAPI(macAddress);
+}
+
 void broadcastDiscovery() {
+  // Check if startup delay is complete
+  if (!startupDelayComplete) {
+    unsigned long currentTime = millis();
+    if (currentTime - startupTime < STARTUP_DELAY) {
+      // Still within startup delay, skip discovery broadcast
+      unsigned long remainingTime = STARTUP_DELAY - (currentTime - startupTime);
+      if (remainingTime % 5000 < 100) { // Log roughly every 5 seconds
+        Serial.printf("Startup delay in progress. %lu seconds remaining before discovery starts...\n", remainingTime / 1000);
+      }
+      return;
+    } else {
+      // Startup delay completed, enable discovery mode
+      startupDelayComplete = true;
+      discoveryMode = true;
+      discoveryStartTime = currentTime;
+      Serial.println("Startup delay complete! Starting discovery mode...");
+      digitalWrite(DISCOVERY_LED_PIN, HIGH);
+    }
+  }
+  
   udp.beginPacket(IPAddress(255, 255, 255, 255), UDP_PORT);
 
   DynamicJsonDocument discoveryDoc(128);
@@ -235,12 +511,18 @@ bool checkWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi connection lost! Attempting to reconnect...");
 
-    WiFi.reconnect();
+    // First disconnect and then reconnect - more reliable than just reconnect()
+    WiFi.disconnect();
+    delay(1000);
+    WiFi.begin(ssid, password);
 
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
       delay(100);
       attempts++;
+      if (attempts % 10 == 0) {
+        Serial.print(".");
+      }
     }
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -250,6 +532,10 @@ bool checkWiFiConnection() {
       return true;
     } else {
       Serial.println("Failed to reconnect to WiFi");
+      // Try restarting the WiFi adapter as a last resort
+      WiFi.disconnect(true);
+      delay(1000);
+      WiFi.begin(ssid, password);
       return false;
     }
   }
@@ -260,7 +546,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
   switch (type) {
     case WStype_DISCONNECTED:
       Serial.printf("[%u] Disconnected!\n", num);
-      delay(50);
+      // Remove delay to prevent blocking the task
       break;
 
     case WStype_CONNECTED:
@@ -268,8 +554,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
         IPAddress ip = webSocket.remoteIP(num);
         Serial.printf("[%u] Connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
 
-        delay(100);
-
+        // Create a smaller JSON document with a reasonable size
         DynamicJsonDocument statusDoc(128);
         statusDoc["type"] = "discovery_status";
         statusDoc["active"] = discoveryMode;
@@ -284,7 +569,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
       {
         Serial.printf("[%u] Received text: %s\n", num, payload);
 
-        DynamicJsonDocument doc(256);
+        // Increase buffer size to handle larger JSON messages
+        DynamicJsonDocument doc(1024);
         DeserializationError error = deserializeJson(doc, payload);
 
         if (error) {
@@ -542,6 +828,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
           response["type"] = "id_assigned";
           response["assigned_id"] = assignedId;
           response["mac"] = macAddress;
+          response["threshold"] = distanceThreshold;
 
           String jsonResponse;
           serializeJson(response, jsonResponse);
@@ -607,8 +894,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
             parkingSpots[spotIndex].distance = distance;
 
-            if (!hasSensorError) {
-              parkingSpots[spotIndex].isOccupied = (distance <= DISTANCE_THRESHOLD && distance > 0);
+            if (doc.containsKey("isOccupied") && !hasSensorError) {
+              parkingSpots[spotIndex].isOccupied = doc["isOccupied"];
+            } 
+            else if (!hasSensorError) {
+              parkingSpots[spotIndex].isOccupied = (distance <= distanceThreshold && distance > 0);
             }
 
             parkingSpots[spotIndex].lastUpdate = millis();
@@ -654,6 +944,16 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
               Serial.println("Spot status changed, updating device status");
               updateSlaveDevicesStatus();
             }
+            
+            // Immediately send updates to the API when receiving valid data
+            // This ensures real-time updates are sent as soon as they're received
+            if (WiFi.status() == WL_CONNECTED) {
+              // Use a separate task to handle API updates to prevent blocking the websocket
+              updateSpotStatusOnApi(spotIndex);
+              sendSensorDataToApi(spotIndex, parkingSpots[spotIndex].distance, parkingSpots[spotIndex].hasSensorError);
+              parkingSpots[spotIndex].syncedWithApi = true;
+              Serial.printf("Immediately sent API update for spot %d\n", id);
+            }
           }
         }
       }
@@ -666,6 +966,7 @@ void updateLocalStatusLeds() {
     DynamicJsonDocument response(128);
     response["id"] = parkingSpots[i].id;
     response["led"] = parkingSpots[i].isOccupied ? "red" : "green";
+    response["override"] = true;
 
     String jsonResponse;
     serializeJson(response, jsonResponse);
@@ -681,16 +982,19 @@ void slaveComTaskFunction(void* parameter) {
   const unsigned long LOCAL_UPDATE_INTERVAL = 2000;
   
   for (;;) {
+    // Use a non-blocking approach for stability
+    yield();
+    
+    // Handle WebSocket messages but don't block for too long
     webSocket.loop();
     
-    checkDiscoveryButton();
+    // Check button state more efficiently
     bool buttonState = digitalRead(DISCOVERY_BUTTON_PIN);
-    if (buttonState == LOW) {
-      physicalOverrideActive = true;
-      discoveryMode = true;
-    } else {
-      physicalOverrideActive = false;
+    if (buttonState != lastButtonState) {
+      // Only process button state changes rather than checking every cycle
+      checkDiscoveryButton();
     }
+    lastButtonState = buttonState;
     
     unsigned long currentTime = millis();
     
@@ -734,20 +1038,72 @@ void slaveComTaskFunction(void* parameter) {
 }
 
 void apiTaskFunction(void* parameter) {
+  unsigned long lastMemReport = 0;
+  
   for (;;) {
+    // Use a non-blocking approach for stability
+    yield(); // Allow other tasks to run and feed the hardware watchdog
+    // Report memory usage every 2 minutes to help with debugging
     unsigned long currentTime = millis();
-    
-    if (WiFi.status() == WL_CONNECTED && currentTime - lastApiSyncTime >= API_SYNC_INTERVAL) {
-      syncWithApi();
-      lastApiSyncTime = currentTime;
+    if (currentTime - lastMemReport > 120000) {
+      Serial.printf("Free heap: %d bytes, largest block: %d bytes\n", 
+                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      lastMemReport = currentTime;
     }
     
-    if (WiFi.status() == WL_CONNECTED && currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
-      sendHealthPing();
+    // Only process API requests if WiFi is connected to avoid unnecessary operations
+    if (WiFi.status() == WL_CONNECTED) {
+      // Use current time for each check to ensure accurate timing
+      currentTime = millis();
+      
+      // Regular API sync at defined intervals
+      if (currentTime - lastApiSyncTime >= API_SYNC_INTERVAL) {
+        // Process any queued API requests - spread them out to avoid memory spikes
+        
+        // First, send health ping - most important
+        sendHealthPing();
+        delay(50); // Allow some time for processing
+        
+        // Then check threshold periodically - less frequent
+        if (currentTime - lastThresholdCheckTime >= THRESHOLD_CHECK_INTERVAL) {
+          fetchThresholdFromApi();
+        }
+        delay(50); // Allow some time for processing
+        
+        // Finally handle any spots that need API updates - one at a time to avoid memory spikes
+        bool updatedASpot = false;
+        for (int i = 0; i < connectedSpots; i++) {
+          if (!parkingSpots[i].syncedWithApi) {
+            initializeSpotWithApi(i);
+            delay(50); // Allow some time for processing
+            updateSpotStatusOnApi(i);
+            delay(50); // Allow some time for processing
+            sendSensorDataToApi(i, parkingSpots[i].distance, parkingSpots[i].hasSensorError);
+            
+            updatedASpot = true;
+            break; // Only process one spot per cycle to avoid memory spikes
+          }
+        }
+        
+        if (!updatedASpot) {
+          // Only update timestamp if we didn't process any spots (which would need continued processing)
+          lastApiSyncTime = currentTime;
+        }
+      }
+      
+      // Send health pings independently from the main sync cycle
+      currentTime = millis();
+      if (currentTime - lastHealthPingTime >= HEALTH_PING_INTERVAL) {
+        sendHealthPing();
+      }
     }
     
+    // Handle WiFi reconnection periodically
+    currentTime = millis();
     static unsigned long lastWiFiCheck = 0;
-    if (wifiDisconnectionDetected && currentTime - lastWiFiCheck >= 30000) {
+    if ((WiFi.status() != WL_CONNECTED || wifiDisconnectionDetected) && 
+         currentTime - lastWiFiCheck >= 10000) { // Check more frequently - 10s instead of 30s
+      
       Serial.println("Periodic WiFi connection check...");
       if (checkWiFiConnection()) {
         wifiDisconnectionDetected = false;
@@ -768,6 +1124,8 @@ void apiTaskFunction(void* parameter) {
       lastWiFiCheck = currentTime;
     }
     
+    // Use a shorter delay to be more responsive to API requests
+    // but avoid extremely short delays that might cause task watchdog timeouts
     delay(100);
   }
 }
@@ -779,6 +1137,8 @@ void syncTaskFunction(void* parameter) {
   int previousActiveSpots = 0;
 
   for (;;) {
+    // Use a non-blocking approach for stability
+    yield(); // Allow other tasks to run and feed the hardware watchdog
     unsigned long currentTime = millis();
 
     if (discoveryMode) {
@@ -796,6 +1156,11 @@ void syncTaskFunction(void* parameter) {
         responseDoc["type"] = "discovery_status";
         responseDoc["active"] = false;
         responseDoc["physical_override"] = false;
+        responseDoc["source"] = "timeout";
+        
+        String wsJson;
+        serializeJson(responseDoc, wsJson);
+        webSocket.broadcastTXT(wsJson);
         
         Serial.println("Discovery mode ended due to timeout");
       }
@@ -945,10 +1310,37 @@ void printStoredDeviceMappings() {
   Serial.println("----------------------------\n");
 }
 
+void updateThresholdForAllSlaves() {
+  Serial.println("Updating threshold value for all connected slaves");
+  
+  for (int i = 0; i < connectedSpots; i++) {
+    DynamicJsonDocument thresholdDoc(256);
+    thresholdDoc["id"] = parkingSpots[i].id;
+    thresholdDoc["threshold"] = distanceThreshold;
+    
+    String jsonThreshold;
+    serializeJson(thresholdDoc, jsonThreshold);
+    
+    for (uint8_t num = 0; num < webSocket.connectedClients(); num++) {
+      webSocket.sendTXT(num, jsonThreshold);
+    }
+    
+    Serial.printf("Sent threshold update (%d cm) to device ID %d\n", 
+                 distanceThreshold, parkingSpots[i].id);
+  }
+
+  thresholdUpdated = false;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("ESP32 Master - Smart Parking System");
-
+  
+  // Configure hardware watchdog timer to reset if system hangs
+  // Use the ESP32 hardware watchdog timer instead of task watchdog
+  // This is simpler and more reliable for crash recovery
+  // The ESP32 has a built-in watchdog that will reset the device if it hangs
+  
   pinMode(DISCOVERY_BUTTON_PIN, INPUT_PULLUP);
   pinMode(DISCOVERY_LED_PIN, OUTPUT);
   pinMode(ERROR_LED_PIN, OUTPUT);
@@ -959,6 +1351,8 @@ void setup() {
 
   Serial.println("Initializing device mapping storage in EEPROM...");
   printStoredDeviceMappings();
+  
+  distanceThreshold = loadThresholdValue();
 
   WiFi.onEvent(WiFiEventHandler);
 
@@ -976,9 +1370,15 @@ void setup() {
   udp.begin(UDP_PORT);
   Serial.print("UDP Discovery Service started on port ");
   Serial.println(UDP_PORT);
-
-  discoveryMode = true;
-  discoveryStartTime = millis();
+  
+  // Set startup time and initialize startup delay
+  startupTime = millis();
+  startupDelayComplete = false;
+  Serial.printf("Waiting %d seconds before starting discovery...\n", STARTUP_DELAY / 1000);
+  
+  // Discovery will be enabled after the startup delay
+  discoveryMode = false;
+  discoveryStartTime = 0;
   lastDiscoveryTime = 0;
 
   webSocket.begin();
@@ -999,16 +1399,14 @@ void setup() {
 
   loadDeviceMappings();
   
-  if (WiFi.status() == WL_CONNECTED) {
-    for (int i = 0; i < connectedSpots; i++) {
-      initializeSpotWithApi(i);
-    }
-  }
+  // Don't immediately initialize with API on startup to prevent phantom spots
+  // We'll let the normal sync process handle initialization after slaves connect
 
+  // Increased stack size to prevent stack overflow
   xTaskCreatePinnedToCore(
     slaveComTaskFunction,
     "SlaveComTask",
-    10000,
+    16384, // Increased from 10000
     NULL,
     1,
     &SlaveComTask,
@@ -1017,7 +1415,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     syncTaskFunction,
     "SyncTask",
-    10000,
+    16384, // Increased from 10000
     NULL,
     1,
     &SyncTask,
@@ -1026,7 +1424,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     apiTaskFunction,
     "ApiTask",
-    10000,
+    16384, // Increased from 10000
     NULL,
     1,
     &ApiTask,
@@ -1045,6 +1443,16 @@ void checkDiscoveryButton() {
     lastDiscoveryTime = 0;
     digitalWrite(DISCOVERY_LED_PIN, HIGH);
 
+    DynamicJsonDocument wsDoc(128);
+    wsDoc["type"] = "discovery_status";
+    wsDoc["active"] = true;
+    wsDoc["physical_override"] = true;
+    wsDoc["source"] = "physical_button";
+
+    String wsJson;
+    serializeJson(wsDoc, wsJson);
+    webSocket.broadcastTXT(wsJson);
+
     Serial.println("Physical discovery override activated!");
   }
 
@@ -1058,6 +1466,13 @@ void checkDiscoveryButton() {
     DynamicJsonDocument responseDoc(128);
     responseDoc["type"] = "discovery_status";
     responseDoc["active"] = false;
+    responseDoc["physical_override"] = false;
+    responseDoc["source"] = "physical_button";
+    
+    String wsJson;
+    serializeJson(responseDoc, wsJson);
+    webSocket.broadcastTXT(wsJson);
+    
     Serial.println("Physical discovery override deactivated!");
   }
 
@@ -1089,14 +1504,59 @@ bool checkForSystemErrors() {
 }
 
 void loop() {
-
-  delay(100);
+  // Check if startup delay is complete
+  if (!startupDelayComplete) {
+    unsigned long currentTime = millis();
+    if (currentTime - startupTime >= STARTUP_DELAY) {
+      startupDelayComplete = true;
+      discoveryMode = true;
+      discoveryStartTime = currentTime;
+      Serial.println("Startup delay complete! Starting discovery mode...");
+      digitalWrite(DISCOVERY_LED_PIN, HIGH);
+      
+      // Broadcast the first discovery packet
+      broadcastDiscovery();
+    } else {
+      // Print status message every 5 seconds during startup delay
+      unsigned long remainingTime = STARTUP_DELAY - (currentTime - startupTime);
+      if (currentTime % 5000 < 100) {
+        Serial.printf("Startup delay in progress. %lu seconds remaining...\n", remainingTime / 1000);
+      }
+    }
+  }
+  
+  static unsigned long lastHeapReport = 0;
+  unsigned long now = millis();
+  
+  // Log heap status every minute to help diagnose memory issues
+  if (now - lastHeapReport > 60000) {
+    Serial.printf("Heap status - Free: %d bytes, Largest block: %d bytes\n", 
+                 ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    lastHeapReport = now;
+  }
+  
+  // Always use yield() to feed the watchdog and allow other tasks to run
+  yield();
+  delay(50); // Shorter delay for more responsive system
 }
 
 void initializeSpotWithApi(int index) {
   if (index < 0 || index >= connectedSpots) return;
   
   int spotId = parkingSpots[index].id;
+  
+  // Check if this spot has received an actual reading from a slave
+  // Only initialize spots that have received at least one update from the slave
+  unsigned long currentTime = millis();
+  unsigned long lastUpdateTime = parkingSpots[index].lastUpdate;
+  
+  // If the lastUpdate time is too old (device default time), don't initialize the spot
+  // This prevents phantom spots in Firebase when no slave is actually connected
+  if (lastUpdateTime == 0 || currentTime - lastUpdateTime > 20000) {
+    Serial.printf("Skipping API initialization for spot %d - no recent updates from device\n", spotId);
+    return;
+  }
+  
   String endpoint = "/init/" + String(spotId);
   
   if (makeApiRequest(endpoint, "POST")) {
@@ -1187,36 +1647,75 @@ bool makeApiRequest(String endpoint, String method, String payload) {
   Serial.print("Making API request to: ");
   Serial.println(url);
   
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
+  // Set a timeout for the HTTP client to prevent hanging
+  http.setTimeout(5000); // 5 second timeout
   
-  int httpResponseCode;
-  
-  if (method == "GET") {
-    httpResponseCode = http.GET();
-  } else if (method == "POST") {
-    httpResponseCode = http.POST(payload);
-  } else if (method == "PUT") {
-    httpResponseCode = http.PUT(payload);
-  } else {
-    Serial.println("Unsupported HTTP method");
-    http.end();
-    return false;
-  }
-  
+  // Add retry mechanism with limited attempts
+  int maxRetries = 2; // Keep retries limited to avoid resource exhaustion
+  int retry = 0;
   bool success = false;
+  int httpResponseCode = -1;
   
-  if (httpResponseCode > 0) {
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-    String response = http.getString();
-    Serial.println("Response: " + response);
-    success = (httpResponseCode == 200 || httpResponseCode == 201);
-  } else {
-    Serial.print("Error on API request: ");
-    Serial.println(httpResponseCode);
+  while (retry <= maxRetries && !success) {
+    if (retry > 0) {
+      Serial.printf("Retry attempt %d for %s\n", retry, url.c_str());
+      delay(500 * retry); // Increasing delay between retries
+    }
+    
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    
+    if (method == "GET") {
+      httpResponseCode = http.GET();
+    } else if (method == "POST") {
+      httpResponseCode = http.POST(payload);
+    } else if (method == "PUT") {
+      httpResponseCode = http.PUT(payload);
+    } else {
+      Serial.println("Unsupported HTTP method");
+      http.end();
+      return false;
+    }
+    
+    if (httpResponseCode > 0) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+      String response = http.getString();
+      Serial.println("Response: " + response);
+      
+      success = (httpResponseCode >= 200 && httpResponseCode < 300); // Consider all 2xx as success
+      if (success) {
+        break;
+      }
+      
+      // Only retry certain error codes
+      if (httpResponseCode == 429 || httpResponseCode >= 500) {
+        // Rate limiting or server errors - worth retrying
+        retry++;
+        // Make sure to close the connection before retrying
+        http.end();
+      } else {
+        // Client errors (4xx except 429) - don't retry
+        http.end(); // Always close the connection
+        break;
+      }
+    } else {
+      Serial.print("Error on API request: ");
+      Serial.println(httpResponseCode);
+      retry++;
+      // Make sure to close the connection before retrying
+      http.end();
+    }
+    
+    // Yield to prevent watchdog timeouts during API operations
+    yield();
   }
   
+  if (!success && retry > maxRetries) {
+    Serial.println("Maximum retries reached for API request");
+  }
+  
+  // Ensure HTTP client is always properly closed
   http.end();
   return success;
 }
@@ -1226,11 +1725,16 @@ void sendHealthPing() {
   
   Serial.println("Sending health ping to API...");
   
-  StaticJsonDocument<256> jsonDoc;
+  StaticJsonDocument<384> jsonDoc;
   jsonDoc["deviceId"] = "master";
   jsonDoc["systemStatus"] = "online";
   jsonDoc["wifiConnected"] = (WiFi.status() == WL_CONNECTED);
   jsonDoc["slaveDevices"] = connectedSpots;
+  jsonDoc["ip"] = WiFi.localIP().toString();
+  jsonDoc["httpPort"] = 80;
+  jsonDoc["wsPort"] = 81;
+  jsonDoc["discoveryMode"] = discoveryMode;
+  jsonDoc["physicalOverride"] = physicalOverrideActive;
   
   String payload;
   serializeJson(jsonDoc, payload);
@@ -1244,21 +1748,89 @@ void sendHealthPing() {
   lastHealthPingTime = millis();
 }
 
+void fetchThresholdFromApi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot fetch threshold: WiFi not connected");
+    return;
+  }
+  
+  Serial.println("Fetching threshold configuration from API...");
+  
+  HTTPClient http;
+  String url = String(API_BASE_URL) + "/api/parking/config/threshold/master";
+  
+  http.begin(url);
+  int httpCode = http.GET();
+  
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    Serial.println("Received threshold response: " + payload);
+    
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (!error) {
+      if (doc.containsKey("success") && doc["success"] && doc.containsKey("data")) {
+        int newThreshold = doc["data"]["value"];
+        String source = doc["source"];
+        
+        if (newThreshold > 0 && newThreshold <= MAX_DISTANCE) {
+          if (distanceThreshold != newThreshold) {
+            distanceThreshold = newThreshold;
+            thresholdUpdated = true;
+            
+            storeThresholdValue(newThreshold);
+            
+            Serial.printf("Updated threshold from API to %d cm (source: %s)\n", 
+                         newThreshold, source.c_str());
+            
+            updateThresholdForAllSlaves();
+          } else {
+            Serial.printf("Threshold already set to %d cm\n", newThreshold);
+          }
+        } else {
+          Serial.println("Received invalid threshold value from API");
+        }
+      } else {
+        Serial.println("API response missing required fields");
+      }
+    } else {
+      Serial.print("JSON parsing error: ");
+      Serial.println(error.c_str());
+    }
+  } else {
+    Serial.print("HTTP error fetching threshold: ");
+    Serial.println(httpCode);
+  }
+  
+  http.end();
+  lastThresholdCheckTime = millis();
+}
+
 void syncWithApi() {
   if (WiFi.status() != WL_CONNECTED) return;
   
-  Serial.println("Syncing data with API...");
+  Serial.println("Performing maintenance API tasks...");
   
+  // Always send health ping during regular maintenance
   sendHealthPing();
   
+  // Check for any spots that need initialization or missed updates
   for (int i = 0; i < connectedSpots; i++) {
+    // Only initialize spots that haven't been initialized yet
     if (!parkingSpots[i].syncedWithApi) {
       initializeSpotWithApi(i);
+      
+      // Update status and send sensor data for newly initialized spots
+      updateSpotStatusOnApi(i);
+      sendSensorDataToApi(i, parkingSpots[i].distance, parkingSpots[i].hasSensorError);
     }
-    
-    updateSpotStatusOnApi(i);
-    
-    sendSensorDataToApi(i, parkingSpots[i].distance, parkingSpots[i].hasSensorError);
+  }
+
+  // Check threshold periodically
+  unsigned long currentTime = millis();
+  if (currentTime - lastThresholdCheckTime >= THRESHOLD_CHECK_INTERVAL) {
+    fetchThresholdFromApi();
   }
   
   lastApiSyncTime = millis();
