@@ -1,5 +1,6 @@
 import db from './firebaseAdmin';
 import { logApiRequest } from './logHandler';
+import { KILL_SWITCH_ENABLED } from '../context/KillSwitchContext';
 
 // The maximum time allowed since last health ping before considering a device offline (in milliseconds)
 const MAX_PING_AGE = 40000; // 40 seconds
@@ -10,6 +11,11 @@ const MAX_PING_AGE = 40000; // 40 seconds
  * @returns {Promise<boolean>} - True if the device is online, false if offline
  */
 export async function isDeviceOnline(deviceId) {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return false;
+  }
+  
   try {
     const deviceRef = db.ref(`SParking/Device${deviceId}`);
     
@@ -54,6 +60,11 @@ export async function isDeviceOnline(deviceId) {
  * @returns {Promise<string|null>} - ISO string of last seen time or null if never seen
  */
 export async function getDeviceLastSeen(deviceId) {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return null;
+  }
+  
   try {
     const deviceRef = db.ref(`SParking/Device${deviceId}`);
     
@@ -89,6 +100,11 @@ export async function getDeviceLastSeen(deviceId) {
  * Should be called periodically to keep the "Last seen" information current
  */
 export async function updateOfflineDeviceTimers() {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return;
+  }
+  
   try {
     // Get all devices
     const snapshot = await db.ref('SParking').once('value');
@@ -124,6 +140,11 @@ export async function updateOfflineDeviceTimers() {
 }
 
 export async function updateAllDevicesOnlineStatus() {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return;
+  }
+  
   try {
     // Get all devices
     const snapshot = await db.ref('SParking').once('value');

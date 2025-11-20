@@ -2,6 +2,7 @@ import '../styles/globals.css';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { isLoggedIn } from '../lib/auth';
+import { KillSwitchProvider } from '../context/KillSwitchContext';
 
 function MyApp({ Component, pageProps }) {
   const router = useRouter();
@@ -63,7 +64,11 @@ function MyApp({ Component, pageProps }) {
     return <div>Loading...</div>;
   }
   
-  return <Component {...pageProps} />;
+  return (
+    <KillSwitchProvider>
+      <Component {...pageProps} />
+    </KillSwitchProvider>
+  );
 }
 
 export default MyApp;

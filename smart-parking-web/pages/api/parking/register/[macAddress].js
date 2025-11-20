@@ -1,6 +1,7 @@
 import db from '../../../../lib/firebaseAdmin';
 import { logApiRequest } from '../../../../lib/logHandler';
 import { validateMacAddress } from '../../../../lib/apiHelpers';
+import { checkKillSwitch } from '../../../../lib/killSwitchApi';
 
 /**
  * API handler for registering devices by MAC address
@@ -10,6 +11,11 @@ import { validateMacAddress } from '../../../../lib/apiHelpers';
  * 3. If no, assign a new ID and store the mapping within the device object itself
  */
 export default async function handler(req, res) {
+  // Check kill switch first
+  if (checkKillSwitch(res)) {
+    return; // Kill switch is enabled, response already sent
+  }
+  
   // Only allow POST requests for device registration
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });

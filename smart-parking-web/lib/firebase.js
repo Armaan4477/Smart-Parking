@@ -6,4 +6,6 @@ import firebaseConfig from './firebaseConfig';
 const firebaseApp = initializeApp(firebaseConfig);
 const database = getDatabase(firebaseApp);
 
+// Re-export kill switch for convenience
+export { KILL_SWITCH_ENABLED } from '../context/KillSwitchContext';
 export { database };

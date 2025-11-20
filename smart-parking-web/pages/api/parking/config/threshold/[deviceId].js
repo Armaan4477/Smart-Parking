@@ -1,8 +1,14 @@
 import db from '../../../../../lib/firebaseAdmin';
 import { validateDeviceId } from '../../../../../lib/apiHelpers';
 import { logApiRequest } from '../../../../../lib/logHandler';
+import { checkKillSwitch } from '../../../../../lib/killSwitchApi';
 
 export default async function handler(req, res) {
+  // Check kill switch first
+  if (checkKillSwitch(res)) {
+    return; // Kill switch is enabled, response already sent
+  }
+  
   const { deviceId } = req.query;
 
   // Validate device ID

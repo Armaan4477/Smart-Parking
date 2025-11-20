@@ -1,8 +1,14 @@
 import db from '../../../../lib/firebaseAdmin';
 import { logApiRequest } from '../../../../lib/logHandler';
 import { validateMacAddress } from '../../../../lib/apiHelpers';
+import { checkKillSwitch } from '../../../../lib/killSwitchApi';
 
 export default async function handler(req, res) {
+  // Check kill switch first
+  if (checkKillSwitch(res)) {
+    return; // Kill switch is enabled, response already sent
+  }
+  
   // Only allow POST for adding and DELETE for removing mappings
   if (req.method !== 'POST' && req.method !== 'DELETE') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
