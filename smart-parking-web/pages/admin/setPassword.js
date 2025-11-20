@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
+import withAuth from '../../lib/withAuth';
 import styles from '../../styles/Login.module.css';
 
-export default function SetAdminPassword() {
+function SetAdminPassword() {
   const [adminPassword, setAdminPassword] = useState('');
   const [currentUserPassword, setCurrentUserPassword] = useState('');
   const [error, setError] = useState(null);
@@ -112,3 +113,5 @@ export default function SetAdminPassword() {
     </div>
   );
 }
+
+export default withAuth(SetAdminPassword);
