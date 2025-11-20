@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import Layout from '../components/Layout';
+import KillSwitch from '../components/KillSwitch';
 import { subscribeToAllParkingSpots, unsubscribeFromParkingSpots } from '../lib/database';
 import withAuth from '../lib/withAuth';
 
@@ -108,6 +109,11 @@ function Home() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Kill Switch Component */}
+      <div className="mb-6">
+        <KillSwitch />
       </div>
 
       {/* Dashboard Cards */}
