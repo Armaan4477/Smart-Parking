@@ -41,8 +41,8 @@ public class MainActivity extends AppCompatActivity {
     private Button retryButton;
     private CardView masterStatusCard;
     
-    // Auto-refresh interval (30 seconds)
-    private static final long AUTO_REFRESH_INTERVAL = 30000;
+    // Auto-refresh interval (5 seconds)
+    private static final long AUTO_REFRESH_INTERVAL = 5000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,13 +57,13 @@ public class MainActivity extends AppCompatActivity {
         initViews();
         
         // Set up refresh listener
-        swipeRefresh.setOnRefreshListener(this::fetchParkingData);
+        swipeRefresh.setOnRefreshListener(() -> fetchParkingData(true));
         
         // Set up retry button
-        retryButton.setOnClickListener(v -> fetchParkingData());
+        retryButton.setOnClickListener(v -> fetchParkingData(true));
         
         // Initial data fetch
-        fetchParkingData();
+        fetchParkingData(true);
         
         // Start auto-refresh
         startAutoRefresh();
@@ -84,20 +84,26 @@ public class MainActivity extends AppCompatActivity {
         masterStatusCard = findViewById(R.id.masterStatusCard);
     }
     
-    private void fetchParkingData() {
-        swipeRefresh.setRefreshing(true);
-        errorCard.setVisibility(View.GONE);
+    private void fetchParkingData(boolean showLoading) {
+        if (showLoading) {
+            swipeRefresh.setRefreshing(true);
+            errorCard.setVisibility(View.GONE);
+        }
         
         apiService.fetchParkingData(new ParkingApiService.ParkingDataCallback() {
             @Override
             public void onSuccess(Map<String, ParkingSpot> spots, MasterDevice master) {
-                swipeRefresh.setRefreshing(false);
+                if (showLoading) {
+                    swipeRefresh.setRefreshing(false);
+                }
                 updateUI(spots, master);
             }
 
             @Override
             public void onError(String error) {
-                swipeRefresh.setRefreshing(false);
+                if (showLoading) {
+                    swipeRefresh.setRefreshing(false);
+                }
                 showError(error);
             }
         });
@@ -177,7 +183,7 @@ public class MainActivity extends AppCompatActivity {
         autoRefreshRunnable = new Runnable() {
             @Override
             public void run() {
-                fetchParkingData();
+                fetchParkingData(false); // Background refresh without showing loading spinner
                 autoRefreshHandler.postDelayed(this, AUTO_REFRESH_INTERVAL);
             }
         };
@@ -193,7 +199,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        fetchParkingData();
+        fetchParkingData(true);
         startAutoRefresh();
     }
     
