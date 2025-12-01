@@ -3,8 +3,72 @@ import { ref, get, set, query, orderByChild, equalTo } from 'firebase/database';
 import { logApiRequest } from './logHandler';
 import { createHash, randomBytes } from 'crypto';
 
-// In-memory session storage (would use cookies or localStorage in production)
-let currentUser = null;
+// Cookie management helpers
+const COOKIE_NAME = 'smart_parking_session';
+const COOKIE_MAX_AGE = 15 * 60; // 15 minutes in seconds
+
+/**
+ * Sets a cookie with the user session
+ * @param {string} username - The username to store in the cookie
+ */
+const setSessionCookie = (username) => {
+  if (typeof window === 'undefined') return;
+  
+  const expiresAt = new Date(Date.now() + COOKIE_MAX_AGE * 1000).toISOString();
+  const sessionData = JSON.stringify({ username, expiresAt });
+  
+  // Set cookie with 15-minute expiration
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(sessionData)}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Strict`;
+};
+
+/**
+ * Gets the session data from cookie
+ * @returns {object|null} - The session data or null if not found/expired
+ */
+const getSessionCookie = () => {
+  if (typeof window === 'undefined') return null;
+  
+  const cookies = document.cookie.split(';');
+  const sessionCookie = cookies.find(cookie => cookie.trim().startsWith(`${COOKIE_NAME}=`));
+  
+  if (!sessionCookie) return null;
+  
+  try {
+    const cookieValue = sessionCookie.split('=')[1];
+    const sessionData = JSON.parse(decodeURIComponent(cookieValue));
+    
+    // Check if session has expired
+    if (new Date(sessionData.expiresAt) < new Date()) {
+      clearSessionCookie();
+      return null;
+    }
+    
+    return sessionData;
+  } catch (error) {
+    console.error('Error parsing session cookie:', error);
+    return null;
+  }
+};
+
+/**
+ * Clears the session cookie
+ */
+const clearSessionCookie = () => {
+  if (typeof window === 'undefined') return;
+  
+  document.cookie = `${COOKIE_NAME}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+};
+
+/**
+ * Refreshes the session by extending the cookie expiration
+ * Call this on user activity to keep the session alive
+ */
+export const refreshSession = () => {
+  const currentUser = getCurrentUser();
+  if (currentUser) {
+    setSessionCookie(currentUser.username);
+  }
+};
 
 /**
  * Hashes a password with the provided salt using SHA-256
@@ -189,11 +253,8 @@ export const login = async (username, password) => {
       return false;
     }
     
-    // Store user in memory for session
-    currentUser = {
-      username,
-      loggedInAt: Date.now()
-    };
+    // Set session cookie
+    setSessionCookie(username);
     
     // Update last login time
     await set(ref(database, `users/${username}/lastLogin`), Date.now());
@@ -230,6 +291,7 @@ export const login = async (username, password) => {
  */
 export const logout = async () => {
   try {
+    const currentUser = getCurrentUser();
     if (currentUser) {
       // Log logout
       await logApiRequest(
@@ -239,10 +301,11 @@ export const logout = async () => {
         { username: currentUser.username },
         true
       );
-      
-      // Clear current user
-      currentUser = null;
     }
+    
+    // Clear session cookie
+    clearSessionCookie();
+    
     return true;
   } catch (error) {
     console.error('Error logging out:', error);
@@ -255,7 +318,8 @@ export const logout = async () => {
  * @returns {boolean} - Whether a user is logged in
  */
 export const isLoggedIn = () => {
-  return currentUser !== null;
+  const sessionData = getSessionCookie();
+  return sessionData !== null;
 };
 
 /**
@@ -263,7 +327,13 @@ export const isLoggedIn = () => {
  * @returns {object|null} - The current user or null if not logged in
  */
 export const getCurrentUser = () => {
-  return currentUser;
+  const sessionData = getSessionCookie();
+  if (!sessionData) return null;
+  
+  return {
+    username: sessionData.username,
+    expiresAt: sessionData.expiresAt
+  };
 };
 
 /**
@@ -275,6 +345,7 @@ export const getCurrentUser = () => {
 export const setAdminPassword = async (adminPassword, currentUserPassword) => {
   try {
     // Verify current user is logged in
+    const currentUser = getCurrentUser();
     if (!currentUser) {
       console.error('No user logged in');
       return false;
@@ -325,6 +396,7 @@ export const setAdminPassword = async (adminPassword, currentUserPassword) => {
   } catch (error) {
     console.error('Error setting admin password:', error);
     
+    const currentUser = getCurrentUser();
     await logApiRequest(
       'system',
       '/auth/setAdminPassword',

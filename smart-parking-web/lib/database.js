@@ -1,8 +1,15 @@
 import { ref, set, update, get, onValue, push, query, orderByChild, limitToLast, serverTimestamp, off } from 'firebase/database';
 import { database } from './firebase';
+import { KILL_SWITCH_ENABLED } from '../context/KillSwitchContext';
 
 // Subscribe to real-time updates for all parking spots
 export const subscribeToAllParkingSpots = (callback) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    callback({ success: false, error: 'Firebase communication is disabled' });
+    return null;
+  }
+  
   const spotsRef = ref(database, 'SParking');
   
   // Set up the listener for real-time updates
@@ -23,6 +30,12 @@ export const subscribeToAllParkingSpots = (callback) => {
 
 // Subscribe to device configuration updates
 export const subscribeToDeviceConfig = (callback) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    callback({ success: false, error: 'Firebase communication is disabled' });
+    return null;
+  }
+  
   const configRef = ref(database, 'SConfig');
   
   onValue(configRef, (snapshot) => {
@@ -48,6 +61,11 @@ export const unsubscribeFromParkingSpots = (spotsRef) => {
 
 // Update parking spot status
 export const updateParkingSpot = async (deviceId, data) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     const spotRef = ref(database, `SParking/Device${deviceId}`);
     await update(spotRef, data);
@@ -60,6 +78,11 @@ export const updateParkingSpot = async (deviceId, data) => {
 
 // Get specific parking spot data
 export const getParkingSpot = async (deviceId) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     const spotRef = ref(database, `SParking/Device${deviceId}`);
     const snapshot = await get(spotRef);
@@ -76,6 +99,11 @@ export const getParkingSpot = async (deviceId) => {
 
 // Get all parking spots
 export const getAllParkingSpots = async () => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     const spotsRef = ref(database, 'SParking');
     const snapshot = await get(spotsRef);
@@ -92,6 +120,11 @@ export const getAllParkingSpots = async () => {
 
 // Initialize parking spot in database with default values
 export const initializeParkingSpot = async (deviceId) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     const spotRef = ref(database, `SParking/Device${deviceId}`);
     await set(spotRef, {
@@ -114,6 +147,11 @@ export const initializeParkingSpot = async (deviceId) => {
 
 // Get threshold configuration for all devices or specific device
 export const getThresholdConfig = async (deviceId = null) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     if (deviceId) {
       // Get threshold for specific device
@@ -155,6 +193,11 @@ export const getThresholdConfig = async (deviceId = null) => {
 
 // Update threshold configuration for all devices or specific device
 export const updateThresholdConfig = async (value, deviceId = null) => {
+  if (KILL_SWITCH_ENABLED) {
+    console.warn('Firebase communication is disabled by kill switch');
+    return { success: false, error: 'Firebase communication is disabled' };
+  }
+  
   try {
     if (!value || isNaN(value) || value < 0 || value > 200) {
       return { success: false, error: 'Invalid threshold value. Must be a number between 0 and 200.' };

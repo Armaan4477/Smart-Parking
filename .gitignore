@@ -13,3 +13,16 @@
 .env.development.local
 .env.test.local
 .env.production.local
+.venv
+
+*.iml
+.gradle
+/local.properties
+Android/.idea/
+Android/app/build/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties

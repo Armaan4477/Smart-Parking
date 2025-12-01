@@ -1,8 +1,14 @@
 import db from '../../../../lib/firebaseAdmin';
 import { validateDeviceId } from '../../../../lib/apiHelpers';
 import { logApiRequest } from '../../../../lib/logHandler';
+import { checkKillSwitch } from '../../../../lib/killSwitchApi';
 
 export default async function handler(req, res) {
+  // Check kill switch first
+  if (checkKillSwitch(res)) {
+    return; // Kill switch is enabled, response already sent
+  }
+  
   // Only allow POST requests for initialization
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
