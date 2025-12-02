@@ -11,10 +11,10 @@ export default function Layout({ children, title = 'Smart Parking System' }) {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
     };
-    
+
     // Initial check
     checkMobile();
-    
+
     // Close sidebar by default on mobile
     if (window.innerWidth < 768) {
       setIsSidebarOpen(false);
@@ -22,7 +22,7 @@ export default function Layout({ children, title = 'Smart Parking System' }) {
 
     // Add resize listener
     window.addEventListener('resize', checkMobile);
-    
+
     // Clean up
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
@@ -49,8 +49,11 @@ export default function Layout({ children, title = 'Smart Parking System' }) {
 
       {/* Footer - with transition */}
       <footer className={`bg-white border-t border-gray-200 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'md:ml-64' : ''}`}>
-        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8 text-center text-gray-600 text-sm">
+        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8 text-center text-black text-lg font-semibold">
           Smart Parking System - ESP32 Firebase Integration
+          <p className="text-sm text-gray-700 mt-1">
+            © {new Date().getFullYear()} All Rights Reserved
+          </p>
         </div>
       </footer>
     </div>
