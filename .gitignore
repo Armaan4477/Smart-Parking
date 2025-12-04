@@ -13,6 +13,7 @@
 .env.development.local
 .env.test.local
 .env.production.local
+
 .venv
 
 *.iml
@@ -26,3 +27,7 @@ Android/app/build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# Backend secrets
+server/server/.env
+server/server/serviceAccountKey.json
