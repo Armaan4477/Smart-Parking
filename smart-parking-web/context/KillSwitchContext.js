@@ -14,7 +14,7 @@ export const useKillSwitch = () => {
 // ⚠️ HARDCODED KILL SWITCH VALUE - Change this value to control Firebase communication
 // Set to true to DISABLE all Firebase communication
 // Set to false to ENABLE all Firebase communication
-export const KILL_SWITCH_ENABLED = false;
+export const KILL_SWITCH_ENABLED = true;
 
 export const KillSwitchProvider = ({ children }) => {
   // Use the hardcoded value
