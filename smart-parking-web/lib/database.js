@@ -169,7 +169,7 @@ export const getThresholdConfig = async (deviceId = null) => {
           return { success: true, data: defaultSnapshot.val() };
         } else {
           // Return fallback value if no configuration exists
-          return { success: true, data: { value: 45 } }; 
+          return { success: true, data: { value: 8 } }; 
         }
       }
     } else {
@@ -181,8 +181,8 @@ export const getThresholdConfig = async (deviceId = null) => {
         return { success: true, data: snapshot.val() };
       } else {
         // Initialize default configuration if none exists
-        await set(ref(database, 'SConfig/thresholds/default'), { value: 45 });
-        return { success: true, data: { default: { value: 45 } } };
+        await set(ref(database, 'SConfig/thresholds/default'), { value: 8 });
+        return { success: true, data: { default: { value: 8 } } };
       }
     }
   } catch (error) {

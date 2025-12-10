@@ -21,11 +21,11 @@ export default async function handler(req, res) {
       if (!data.default) {
         // Initialize default threshold if not present
         await db.ref('SConfig/thresholds/default').set({
-          value: 45,
+          value: 8,
           updatedAt: new Date().toISOString()
         });
         
-        data.default = { value: 45, updatedAt: new Date().toISOString() };
+        data.default = { value: 8, updatedAt: new Date().toISOString() };
       }
       
       return res.status(200).json({ success: true, data });

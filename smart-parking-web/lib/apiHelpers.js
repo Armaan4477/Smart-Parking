@@ -78,7 +78,7 @@ export const validateParkingUpdate = (data) => {
  * @param {number} threshold 
  * @returns {string} 'open' or 'occupied'
  */
-export const parseParkingStatus = (distance, threshold = 45) => {
+export const parseParkingStatus = (distance, threshold = 8) => {
   if (distance <= 0) return 'unknown'; // For sensor errors
-  return distance < threshold ? 'occupied' : 'open';
+  return distance <= threshold ? 'occupied' : 'open';
 };

@@ -54,8 +54,29 @@ export default async function handler(req, res) {
         return res.status(400).json({ success: false, error: 'Distance must be a number' });
       }
       
-      // Parse distance into parking status
-      const parkingStatus = parseParkingStatus(distanceValue);
+      // Fetch the threshold for this device (or use default)
+      let threshold = 8; // Fallback default matching ESP32
+      try {
+        const deviceThresholdSnapshot = await db.ref(`SConfig/thresholds/Device${deviceId}`).once('value');
+        const deviceThresholdData = deviceThresholdSnapshot.val();
+        
+        if (deviceThresholdData && deviceThresholdData.value !== undefined) {
+          threshold = deviceThresholdData.value;
+        } else {
+          // If no device-specific threshold, get the default
+          const defaultThresholdSnapshot = await db.ref('SConfig/thresholds/default').once('value');
+          const defaultThresholdData = defaultThresholdSnapshot.val();
+          
+          if (defaultThresholdData && defaultThresholdData.value !== undefined) {
+            threshold = defaultThresholdData.value;
+          }
+        }
+      } catch (thresholdError) {
+        console.warn(`Failed to fetch threshold for device ${deviceId}, using default:`, thresholdError);
+      }
+      
+      // Parse distance into parking status using the fetched threshold
+      const parkingStatus = parseParkingStatus(distanceValue, threshold);
       updates['Parking Status'] = parkingStatus;
       updates['Sensor Error'] = false;
     }
